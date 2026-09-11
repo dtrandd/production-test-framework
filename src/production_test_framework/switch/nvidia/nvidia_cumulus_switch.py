@@ -37,6 +37,7 @@ from production_test_framework.switch.nvidia.nvue_paths import (
     revision_path,
 )
 from production_test_framework.switch.port_sort import port_id_sort_key
+from production_test_framework.switch.portname import PortNameResolver
 
 requests.packages.urllib3.disable_warnings(requests.packages.urllib3.exceptions.InsecureRequestWarning)
 
@@ -45,6 +46,11 @@ VIEW_DESCRIPTION = "description"
 
 # OpenAPI getInterfaces view=lldp-detail: per-interface LLDP neighbor detail.
 VIEW_LLDP_DETAIL = "lldp-detail"
+
+# NVUE names data ports "swp<cage>", plus a subport index when the cage is
+# broken out. Management, loopback, bridge, bond and VLAN interfaces are
+# reported alongside them and are not data ports.
+_SWP_PREFIX = "swp"
 
 # NVUE applies config changes asynchronously once a changeset is applied.
 _APPLY_TIMEOUT_S = 60.0
@@ -366,10 +372,11 @@ class NvidiaCumulusSwitch(NetworkSwitch):
         return table
 
     def _parse_lldp_neighbors(self, interfaces: dict[str, Any]) -> list[LldpNeighbor]:
+        port_names = self._port_names(interfaces)
         neighbors: list[LldpNeighbor] = []
         for interface_id, body in interfaces.items():
-            switch_port = self._interface_name_to_port(interface_id)
-            if switch_port < 0 or not isinstance(body, dict):
+            switch_port = port_names.port_id(interface_id)
+            if switch_port is None or not isinstance(body, dict):
                 continue
             lldp = body.get("lldp")
             if not isinstance(lldp, dict):
@@ -395,22 +402,20 @@ class NvidiaCumulusSwitch(NetworkSwitch):
                 neighbors.append(LldpNeighbor(interface=interface_id, switch_port=switch_port, chassis_mac=mac))
         return sorted(neighbors, key=lambda neighbor: neighbor.switch_port)
 
-    @staticmethod
-    def _interface_name_to_port(interface_id: str) -> int:
-        """Parse "swp14" -> 14 and "swp1s0" -> 1. Returns -1 for non-swp interfaces."""
-        name = interface_id.strip()
-        if not name.startswith("swp"):
-            return -1
-        rest = name[len("swp") :]
-        # Handle subinterface/breakout notation like "swp1s0" or "swp1/2".
-        separators = [idx for idx in (rest.find("s"), rest.find("/")) if idx >= 0]
-        if separators:
-            rest = rest[: min(separators)]
-        try:
-            port = int(rest)
-        except ValueError:
-            return -1
-        return port if port >= 0 else -1
+    def _port_names(self, interfaces: dict[str, Any]) -> PortNameResolver:
+        """Learn the port ID of every data port from the switch's interface list.
+
+        A port ID is an interface's position in that list, not its cage number, so
+        it can only be learned from the whole list: a broken-out cage contributes
+        one ID per subport and shifts every later cage up. The lldp-detail view
+        enumerates every interface, including those with no neighbor, so its keys
+        are the full GET /interface list; only the swp entries are data ports.
+        """
+        port_names = PortNameResolver()
+        port_names.learn(name for name in interfaces if name.startswith(_SWP_PREFIX))
+        if port_names.has_breakout:
+            self._logger.debug(f"port names: breakout shifts port ids from cage numbers: {port_names.mapping()}")
+        return port_names
 
     @staticmethod
     def _normalize_mac(value: str) -> str:

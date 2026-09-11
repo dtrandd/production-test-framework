@@ -34,6 +34,11 @@ def _switch() -> NvidiaCumulusSwitch:
     return NvidiaCumulusSwitch(NetworkSwitchConfig(host="h", username="u", password="p", verify_tls=False))
 
 
+def _mac_neighbor(mac: str) -> dict:
+    """One lldp-detail interface body advertising a MAC chassis id."""
+    return {"lldp": {"neighbor": {"1": {"port": {"type": "mac", "name": mac}}}}}
+
+
 def test_parse_lldp_neighbors_from_fixture(lldp_payload: dict) -> None:
     neighbors = _switch()._parse_lldp_neighbors(lldp_payload)
 
@@ -46,20 +51,29 @@ def test_parse_lldp_neighbors_from_fixture(lldp_payload: dict) -> None:
     assert neighbors[1].interface == "swp3s0"
 
 
-@pytest.mark.parametrize(
-    ("interface_id", "expected"),
-    [
-        ("swp1", 1),
-        ("swp14", 14),
-        ("swp1s0", 1),
-        ("swp2/3", 2),
-        ("eth0", -1),
-        ("lo", -1),
-        ("swpx", -1),
-    ],
-)
-def test_interface_name_to_port(interface_id: str, expected: int) -> None:
-    assert NvidiaCumulusSwitch._interface_name_to_port(interface_id) == expected
+def test_parse_lldp_neighbors_breakout_shifts_port_ids() -> None:
+    """A neighbour's port ID is its interface's position in the switch's interface
+    list, so both subports of a broken-out cage get their own ID and every later
+    cage shifts up. Truncating the suffix instead reported cage 1 for both.
+    """
+    interfaces = {
+        "eth0": {},
+        "swp1s0": _mac_neighbor("aa:bb:cc:00:00:01"),
+        "swp1s1": _mac_neighbor("aa:bb:cc:00:00:02"),
+        "swp2s0": _mac_neighbor("aa:bb:cc:00:00:03"),
+        # No neighbour, but still occupies port ID 4.
+        "swp2s1": {},
+        "swp3s0": _mac_neighbor("aa:bb:cc:00:00:05"),
+    }
+
+    neighbors = _switch()._parse_lldp_neighbors(interfaces)
+
+    assert [(n.switch_port, n.interface) for n in neighbors] == [
+        (1, "swp1s0"),
+        (2, "swp1s1"),
+        (3, "swp2s0"),
+        (5, "swp3s0"),
+    ]
 
 
 @pytest.mark.parametrize(

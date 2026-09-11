@@ -35,6 +35,12 @@ from production_test_framework.switch.models import (
 )
 from production_test_framework.switch.network_switch import NetworkSwitch
 from production_test_framework.switch.port_sort import port_id_sort_key
+from production_test_framework.switch.portname import PortNameResolver
+
+# EOS names data ports "Ethernet<cage>" (abbreviated "Et<cage>"), plus a subport index
+# when the cage is broken out. The interface status table also reports
+# management, port-channel and VLAN interfaces, which are not data ports.
+_ETHERNET_PREFIXES = ("Ethernet", "Et")
 
 
 class AristaEosSwitch(NetworkSwitch):
@@ -92,7 +98,9 @@ class AristaEosSwitch(NetworkSwitch):
     def lldp_neighbors(self) -> list[LldpNeighbor]:
         """LLDP neighbors whose advertised port id is a MAC (eAPI: show lldp neighbors detail)."""
         payload = self._run_show("show lldp neighbors detail").get("lldpNeighbors", {})
-        return self._parse_lldp_neighbors(payload)
+        # "show lldp neighbors detail" reports only the interfaces that have a
+        # neighbour, so port IDs are learned from the full interface status table.
+        return self._parse_lldp_neighbors(payload, self._port_names(self._interface_statuses()))
 
     @property
     def mac_table(self) -> list[MacEntry]:
@@ -199,11 +207,15 @@ class AristaEosSwitch(NetworkSwitch):
         vlans = [self._parse_vlan(vid, body, statuses) for vid, body in vlan_configs.items()]
         return sorted(vlans, key=lambda vlan: int(vlan.id) if vlan.id.isdigit() else vlan.id)
 
-    def _parse_lldp_neighbors(self, lldp_neighbors: dict[str, Any]) -> list[LldpNeighbor]:
+    def _parse_lldp_neighbors(
+        self,
+        lldp_neighbors: dict[str, Any],
+        port_names: PortNameResolver,
+    ) -> list[LldpNeighbor]:
         neighbors: list[LldpNeighbor] = []
         for interface_id, body in lldp_neighbors.items():
-            switch_port = self._interface_name_to_port(interface_id)
-            if switch_port < 0 or not isinstance(body, dict):
+            switch_port = port_names.port_id(interface_id)
+            if switch_port is None or not isinstance(body, dict):
                 continue
             for entry in body.get("lldpNeighborInfo", []):
                 if not isinstance(entry, dict):
@@ -236,22 +248,19 @@ class AristaEosSwitch(NetworkSwitch):
             )
         return table
 
-    @staticmethod
-    def _interface_name_to_port(interface_id: str) -> int:
-        """Parse "Ethernet14"/"Et14" -> 14 and "Ethernet49/1" -> 49. Returns -1 for non-Ethernet interfaces."""
-        name = interface_id.strip()
-        # Check "Ethernet" before the "Et" abbreviation, since the former also starts with "Et".
-        if name.startswith("Ethernet"):
-            rest = name.removeprefix("Ethernet")
-        elif name.startswith("Et"):
-            rest = name.removeprefix("Et")
-        else:
-            return -1
-        try:
-            port = int(rest.split("/")[0])
-        except ValueError:
-            return -1
-        return port if port >= 0 else -1
+    def _port_names(self, statuses: dict[str, Any]) -> PortNameResolver:
+        """Learn the port ID of every data port from the switch's interface list.
+
+        A port ID is an interface's position in that list, not its cage number, so
+        it can only be learned from the whole list: a broken-out cage contributes
+        one ID per subport and shifts every later cage up. "show interfaces status"
+        is that list; only the Ethernet entries are data ports.
+        """
+        port_names = PortNameResolver()
+        port_names.learn(name for name in statuses if name.startswith(_ETHERNET_PREFIXES))
+        if port_names.has_breakout:
+            self._logger.debug(f"port names: breakout shifts port ids from cage numbers: {port_names.mapping()}")
+        return port_names
 
     @staticmethod
     def _normalize_mac(value: str) -> str:

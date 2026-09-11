@@ -10,6 +10,28 @@ def test_port_id_sort_key_numeric_suffix():
     assert port_id_sort_key("swp1") < port_id_sort_key("swp10")
 
 
+def test_port_id_sort_key_breakout_subports():
+    # Subports order within their cage, and the cage number still wins: a plain
+    # string sort puts swp10s0 ahead of swp1s0.
+    assert port_id_sort_key("swp1s0") < port_id_sort_key("swp1s1")
+    assert port_id_sort_key("swp1s1") < port_id_sort_key("swp2s0")
+    assert port_id_sort_key("swp1s0") < port_id_sort_key("swp10s0")
+    assert port_id_sort_key("Ethernet49/1") < port_id_sort_key("Ethernet49/2")
+    # A cage with no suffix sorts ahead of any subport of the same cage.
+    assert port_id_sort_key("swp1") < port_id_sort_key("swp1s0")
+
+
+def test_sort_ports_breakout_order():
+    ports = [
+        Port(id="swp10s0"),
+        Port(id="swp2s1"),
+        Port(id="swp1s1"),
+        Port(id="swp2s0"),
+        Port(id="swp1s0"),
+    ]
+    assert [port.id for port in sort_ports(ports)] == ["swp1s0", "swp1s1", "swp2s0", "swp2s1", "swp10s0"]
+
+
 def test_sort_ports_natural_order():
     ports = [
         Port(id="swp59"),
