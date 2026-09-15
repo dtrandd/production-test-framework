@@ -42,13 +42,6 @@ RECENT_RESTART_WINDOW_S = 24 * 60 * 60
 def _describe_age(seconds: float) -> str:
     """
     Render a duration as a short string in whichever unit keeps it legible.
-
-    The unit steps up with the magnitude, so the number stays small enough to read at a
-    glance and the caller never has to convert: whole minutes below 90 minutes ("45m"),
-    hours to one decimal below 48 hours ("1.5h"), days to one decimal beyond that ("53.0d").
-
-    Sub-minute durations round to "0m" -- this is for messages where the scale is what
-    matters, not a precise measurement.
     """
     minutes = seconds / 60
     if minutes < 90:
