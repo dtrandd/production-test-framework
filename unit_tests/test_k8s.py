@@ -4,6 +4,7 @@
 """Unit tests for k8s module."""
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -429,6 +430,12 @@ class TestKubernetesClientWorkloadState:
     # -------------------------------------------------------------------------
 
     @staticmethod
+    def _ago(*, days=0.0, hours=0.0, minutes=0.0):
+        """An RFC3339 timestamp that far in the past, in the shape kubectl emits."""
+        moment = datetime.now(UTC) - timedelta(days=days, hours=hours, minutes=minutes)
+        return moment.isoformat().replace("+00:00", "Z")
+
+    @staticmethod
     def _pod_json(*, name, started_at, restarts, finished_at=None, reason="Error"):
         status = {"name": "loki", "restartCount": restarts}
         if finished_at is not None:
@@ -443,7 +450,7 @@ class TestKubernetesClientWorkloadState:
 
     def test_unstable_pods_empty_when_nothing_restarted(self, k8s_client, mock_ssh):
         mock_ssh.run_kubectl.return_value = self._pods_result(
-            self._pod_json(name="loki-write-0", started_at="2026-08-18T10:00:00Z", restarts=0)
+            self._pod_json(name="loki-write-0", started_at=self._ago(days=30), restarts=0)
         )
 
         unstable, result = k8s_client.unstable_pods("lgtma")
@@ -455,9 +462,9 @@ class TestKubernetesClientWorkloadState:
         mock_ssh.run_kubectl.return_value = self._pods_result(
             self._pod_json(
                 name="mimir-ingester-zone-a-0",
-                started_at="2026-08-18T10:00:00Z",
+                started_at=self._ago(hours=2),
                 restarts=3,
-                finished_at="2026-08-18T10:01:00Z",
+                finished_at=self._ago(hours=2, minutes=-1),
             )
         )
 
@@ -469,9 +476,9 @@ class TestKubernetesClientWorkloadState:
         mock_ssh.run_kubectl.return_value = self._pods_result(
             self._pod_json(
                 name="loki-write-0",
-                started_at="2026-08-18T10:00:00Z",
+                started_at=self._ago(hours=6),
                 restarts=1,
-                finished_at="2026-08-18T11:00:00Z",
+                finished_at=self._ago(hours=1),
                 reason="OOMKilled",
             )
         )
@@ -482,28 +489,80 @@ class TestKubernetesClientWorkloadState:
         assert "loki-write-0/loki" in unstable[0]
         assert "OOMKilled" in unstable[0]
 
-    def test_unstable_pods_flags_a_count_over_the_ceiling(self, k8s_client, mock_ssh):
+    def test_unstable_pods_ignores_a_restart_that_has_since_settled(self, k8s_client, mock_ssh):
+        """
+        The production case: a node reboot restarted every pod weeks ago and nothing since.
+        """
         mock_ssh.run_kubectl.return_value = self._pods_result(
             self._pod_json(
                 name="loki-write-0",
-                started_at="2026-08-18T10:00:00Z",
+                started_at=self._ago(days=83),
+                restarts=3,
+                finished_at=self._ago(days=53),
+                reason="Unknown",
+            )
+        )
+
+        unstable, _ = k8s_client.unstable_pods("lgtma")
+
+        assert unstable == []
+
+    def test_unstable_pods_still_flags_a_settled_container_over_the_ceiling(self, k8s_client, mock_ssh):
+        """A count high enough to mean a slow crash loop counts whenever it accumulated."""
+        mock_ssh.run_kubectl.return_value = self._pods_result(
+            self._pod_json(
+                name="loki-write-0",
+                started_at=self._ago(days=83),
                 restarts=11,
-                finished_at="2026-08-18T10:01:00Z",
+                finished_at=self._ago(days=53),
             )
         )
 
         unstable, _ = k8s_client.unstable_pods("lgtma")
 
         assert len(unstable) == 1
-        assert "over the 10 ceiling" in unstable[0]
+        assert "over the 10 restart ceiling" in unstable[0]
+        assert "ago" not in unstable[0]
+
+    def test_unstable_pods_reports_the_age_of_the_restart_not_its_offset(self, k8s_client, mock_ssh):
+        """The message says how long ago, which is the number a reader needs to act."""
+        mock_ssh.run_kubectl.return_value = self._pods_result(
+            self._pod_json(
+                name="loki-write-0",
+                started_at=self._ago(days=30),
+                restarts=1,
+                finished_at=self._ago(minutes=20),
+                reason="OOMKilled",
+            )
+        )
+
+        unstable, _ = k8s_client.unstable_pods("lgtma")
+
+        assert len(unstable) == 1
+        assert "20m ago" in unstable[0]
+
+    def test_unstable_pods_flags_a_count_over_the_ceiling(self, k8s_client, mock_ssh):
+        mock_ssh.run_kubectl.return_value = self._pods_result(
+            self._pod_json(
+                name="loki-write-0",
+                started_at=self._ago(hours=2),
+                restarts=11,
+                finished_at=self._ago(hours=2, minutes=-1),
+            )
+        )
+
+        unstable, _ = k8s_client.unstable_pods("lgtma")
+
+        assert len(unstable) == 1
+        assert "over the 10 restart ceiling" in unstable[0]
 
     def test_unstable_pods_honours_the_name_prefix(self, k8s_client, mock_ssh):
         mock_ssh.run_kubectl.return_value = self._pods_result(
             self._pod_json(
                 name="tempo-ingester-0",
-                started_at="2026-08-18T10:00:00Z",
+                started_at=self._ago(hours=6),
                 restarts=1,
-                finished_at="2026-08-18T11:00:00Z",
+                finished_at=self._ago(hours=1),
             )
         )
 
