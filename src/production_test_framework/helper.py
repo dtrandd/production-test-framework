@@ -295,3 +295,19 @@ def query_mimir(mimir_port: int, endpoint: str, params: dict = None, timeout: in
     base_url = get_mimir_base_url(mimir_port)
     url = f"{base_url}{endpoint}"
     return requests.get(url, params=params, timeout=timeout)
+
+
+def power_cycle_via_ssh(host: str, username: str, sudo_password: str | None = None) -> CommandResult:
+    """Power-cycle `host` by running `ipmitool chassis power cycle` over `ssh -A`.
+
+    Uses the local ssh (agent, ~/.ssh/config, known_hosts); sudo reads the password from stdin.
+    """
+    cmd = [
+        "ssh", "-A",
+        "-o", "BatchMode=yes",
+        "-o", "StrictHostKeyChecking=accept-new",
+        f"{username}@{host}",
+        "sudo -S -p '' ipmitool chassis power cycle",
+    ]
+    stdin = f"{sudo_password}\n" if sudo_password is not None else None
+    return run_command(cmd, timeout=120, stdin_data=stdin)
