@@ -15,7 +15,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from production_test_framework.config import LGTMConfig
@@ -33,6 +33,21 @@ POD_RESTART_INTERVAL_S = 5.0
 
 STARTUP_RESTART_GRACE_S = 5 * 60
 MAX_POD_RESTARTS = 10
+# How recently a restart must have happened to mean anything is wrong *now*. Without this a
+# single node reboot restarts every pod in a namespace at once and fails the restart checks
+# for as long as those pods live, which on a long-lived cluster is indefinitely.
+RECENT_RESTART_WINDOW_S = 24 * 60 * 60
+
+
+def _describe_age(seconds: float) -> str:
+    """
+    Render a duration as a short string in whichever unit keeps it legible.
+    """
+    minutes = seconds / 60
+    if minutes < 90:
+        return f"{minutes:.0f}m"
+    hours = minutes / 60
+    return f"{hours:.1f}h" if hours < 48 else f"{hours / 24:.1f}d"
 
 
 @dataclass
@@ -285,19 +300,26 @@ class KubernetesClient:
         name_prefix: str = "",
         max_restarts: int = MAX_POD_RESTARTS,
         startup_grace_s: float = STARTUP_RESTART_GRACE_S,
+        recent_window_s: float = RECENT_RESTART_WINDOW_S,
     ) -> tuple[list[str], CommandResult]:
         """
-        Describe every pod that looks unstable, empty when all are healthy.
+        Describe every container that looks unstable, empty when all are healthy.
 
-        A pod counts as unstable when it last terminated more than
-        startup_grace_s into its pod's life, or when it has restarted more than
-        max_restarts times whenever those happened.
+        Two signals, either of which reports a container on its own:
+
+        * A restart within recent_window_s that was also more than startup_grace_s into the
+          pod's life. Recency is what separates "wrong now" from "restarted once, weeks ago
+          and stable since"; the grace window excuses components that restart while waiting
+          on their dependencies during a deploy.
+        * More than max_restarts restarts over the container's lifetime, whenever they
+          happened -- a crash loop slow enough that no single window catches it.
         """
         result = self._run_kubectl(f"get pods -n {namespace} -o json")
         if not result.success:
             return [], result
 
         unstable: list[str] = []
+        now = datetime.now(UTC)
 
         for pod in json.loads(result.stdout).get("items", []):
             name = pod["metadata"]["name"]
@@ -314,19 +336,26 @@ class KubernetesClient:
 
                 terminated = status.get("lastState", {}).get("terminated") or {}
                 finished_at = terminated.get("finishedAt")
-                into_life_s = (
-                    (datetime.fromisoformat(finished_at) - pod_started).total_seconds()
-                    if finished_at and pod_started
-                    else None
-                )
+                finished = datetime.fromisoformat(finished_at) if finished_at else None
 
-                if into_life_s is not None and into_life_s > startup_grace_s:
-                    unstable.append(
-                        f"{name}/{status['name']} restarted {restarts}x, last {into_life_s / 60:.0f}m "
-                        f"after the pod started ({terminated.get('reason', 'unknown')})"
+                into_life_s = (finished - pod_started).total_seconds() if finished and pod_started else None
+                since_restart_s = (now - finished).total_seconds() if finished else None
+
+                faults: list[str] = []
+                if (
+                    since_restart_s is not None
+                    and since_restart_s < recent_window_s
+                    and into_life_s is not None
+                    and into_life_s > startup_grace_s
+                ):
+                    faults.append(
+                        f"last restart {_describe_age(since_restart_s)} ago ({terminated.get('reason', 'unknown')})"
                     )
-                elif restarts > max_restarts:
-                    unstable.append(f"{name}/{status['name']} restarted {restarts}x, over the {max_restarts} ceiling")
+                if restarts > max_restarts:
+                    faults.append(f"over the {max_restarts} restart ceiling")
+
+                if faults:
+                    unstable.append(f"{name}/{status['name']} restarted {restarts}x: {'; '.join(faults)}")
 
         return unstable, result
 
