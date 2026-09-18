@@ -1370,3 +1370,33 @@ class TestDockerContainerMixin:
         # It adds a capability rather than being a kind of workload, so it carries no
         # inheritance of its own and can be mixed into anything.
         assert DockerContainerMixin.__mro__[1:] == (object,)
+
+
+class TestCommandFailureDetail:
+    """What a failed command reports, and what it must not hide."""
+
+    class _Workload(CommandWorkload):
+        workload_name = "Inferencex"
+
+        def build_command(self):
+            return ["true"]
+
+    def test_both_streams_are_reported(self):
+        detail = self._Workload()._failure_detail(CommandResult(returncode=1, stdout="the reason", stderr="noise"))
+        assert "the reason" in detail
+        assert "noise" in detail
+        assert "exit status 1" in detail
+
+    def test_docker_pull_progress_does_not_hide_the_real_error(self):
+        """docker writes a successful image pull to stderr; the failure is on stdout."""
+        pull = "latest: Pulling from openmosaic/inferencex\nStatus: Downloaded newer image"
+        detail = self._Workload()._failure_detail(
+            CommandResult(returncode=1, stdout="FAIL: request failure rate 100.0%", stderr=pull)
+        )
+        assert "FAIL: request failure rate 100.0%" in detail
+        # stdout last, so the tail a report keeps is the tool's own diagnosis.
+        assert detail.index("Downloaded newer image") < detail.index("FAIL: request failure rate")
+
+    def test_an_empty_stream_is_left_out(self):
+        detail = self._Workload()._failure_detail(CommandResult(returncode=2, stdout="", stderr="  "))
+        assert detail == "inferencex command failed (exit status 2)"
