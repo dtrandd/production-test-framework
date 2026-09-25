@@ -26,6 +26,11 @@ def bridge_domain_vlan_path(vlan_id: str) -> str:
     return f"{BRIDGE_DOMAIN_VLANS_PATH}/{vlan_id}"
 
 
+def interface_bridge_domain_path(interface_id: str) -> str:
+    """Path to an interface's membership of the bridge domain."""
+    return f"{interface_path(interface_id)}/bridge/domain/{BRIDGE_DOMAIN}"
+
+
 def interface_bridge_vlan_path(interface_id: str, vlan_id: str) -> str:
     """Path to a single VLAN's membership on an interface's bridge domain."""
     return f"{interface_path(interface_id)}/bridge/domain/{BRIDGE_DOMAIN}/vlan/{vlan_id}"

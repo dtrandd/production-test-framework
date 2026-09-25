@@ -48,6 +48,17 @@ class MacEntry:
 
 
 @dataclass(frozen=True)
+class PortBridge:
+    """A port's bridging configuration. A field is None when the switch does not report it,
+    for example on a port that is not bridged."""
+
+    interface: str
+    mode: str | None = None  # "trunk" or "access"
+    native_vlan: int | None = None  # PVID: the VLAN untagged ingress frames are placed in
+    learning: bool | None = None  # True = the port learns source MACs into the FDB
+
+
+@dataclass(frozen=True)
 class SwitchProcess:
     name: str
     pid: int
