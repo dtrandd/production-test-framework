@@ -2,8 +2,8 @@
 # Copyright (c) 2025 Delos Data, Inc.
 
 """
-InferenceX benchmark workload: runs ``benchmark_serving.py`` in a container via ``docker run``
-and reads the JSON result it writes with ``--save-result``.
+InferenceX benchmark workload: runs the ``infx.bench_serving.benchmark_serving`` module in a
+container via ``docker run`` and reads the JSON result it writes with ``--save-result``.
 
 The workload is a pure client -- it drives load against an already-running deployment and never
 launches a server.
@@ -22,6 +22,7 @@ from production_test_framework.workload.docker_mixin import DockerContainerMixin
 
 __all__ = [
     "DEFAULT_BENCHMARK_OPTIONS",
+    "DEFAULT_PYTHON_PATH",
     "JSON_RESULT_INDICATOR",
     "BenchmarkCancelled",
     "BenchmarkResultMissing",
@@ -61,6 +62,11 @@ DEFAULT_BENCHMARK_OPTIONS: Mapping[str, Any] = {
     "result_dir": ".",
     "result_filename": "inferencex-result.json",
 }
+
+# Where the image keeps the ``infx`` package. Upstream moved it from the repo root into
+# ``inferencex-e2e/`` (InferenceX #3525); listing both lets an image built either side of that
+# move import it.
+DEFAULT_PYTHON_PATH = "/workspace/InferenceX/inferencex-e2e:/workspace/InferenceX"
 
 
 @dataclass
@@ -233,11 +239,13 @@ def benchmark_option_argv(options: Mapping[str, Any]) -> list[str]:
 
 class InferencexWorkload(DockerContainerMixin, CommandWorkload):
     """
-    Run the InferenceX / vLLM ``benchmark_serving.py`` workload inside a container on the
+    Run the InferenceX / vLLM ``benchmark_serving`` workload inside a container on the
     same host (requires ``docker`` on PATH; often used with a mounted Docker socket).
 
-    The image must provide ``benchmark_script`` at the given path; adjust defaults to match
-    your InferenceX container layout.
+    The benchmark runs as ``python -m benchmark_module``, the only entrypoint upstream supports
+    since the ``utils/bench_serving/benchmark_serving.py`` script was removed (InferenceX #3494).
+    ``python_path`` is exported as ``PYTHONPATH`` so the image's ``infx`` package is importable;
+    pass ``None`` to leave it unset, or set ``PYTHONPATH`` in ``env`` to override it.
     """
 
     workload_name = "Inferencex"
@@ -248,7 +256,8 @@ class InferencexWorkload(DockerContainerMixin, CommandWorkload):
         *,
         image_name: str = "openmosaic/inferencex:latest",
         container_name: str | None = None,
-        benchmark_script: str = "/workspace/InferenceX/utils/bench_serving/benchmark_serving.py",
+        benchmark_module: str = "infx.bench_serving.benchmark_serving",
+        python_path: str | None = DEFAULT_PYTHON_PATH,
         python_executable: str = "python3",
         benchmark_options: Mapping[str, Any] | None = None,
         benchmark_extra_args: tuple[str, ...] = (),
@@ -256,15 +265,17 @@ class InferencexWorkload(DockerContainerMixin, CommandWorkload):
         env: Mapping[str, str] | None = None,
         docker_extra_args: tuple[str, ...] = (),
     ):
+        # Under the caller's env, so an explicit PYTHONPATH there wins.
+        container_env = {**({"PYTHONPATH": python_path} if python_path else {}), **(env or {})}
         super().__init__(
             image_name=image_name,
             container_name=container_name,
-            env=env,
+            env=container_env,
             docker_extra_args=docker_extra_args,
             timeout=docker_exec_timeout,
         )
 
-        self._benchmark_script = benchmark_script
+        self._benchmark_module = benchmark_module
         self._python_executable = python_executable
         self._benchmark_options = {**DEFAULT_BENCHMARK_OPTIONS, **(benchmark_options or {})}
         self._benchmark_extra_args = benchmark_extra_args
@@ -278,7 +289,8 @@ class InferencexWorkload(DockerContainerMixin, CommandWorkload):
     def _benchmark_inner_argv(self) -> list[str]:
         return [
             self._python_executable,
-            self._benchmark_script,
+            "-m",
+            self._benchmark_module,
             *benchmark_option_argv(self._benchmark_options),
             # Last, so an explicit escape-hatch flag can override anything set above.
             *self._benchmark_extra_args,

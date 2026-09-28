@@ -413,10 +413,12 @@ def expected_inferencex_command(name: str) -> list[str]:
         name,
         "--label",
         f"{CONTAINER_LABEL}={name}",
+        "-e",
+        "PYTHONPATH=/workspace/InferenceX/inferencex-e2e:/workspace/InferenceX",
         "openmosaic/inferencex:latest",
         "sh",
         "-c",
-        "python3 /workspace/InferenceX/utils/bench_serving/benchmark_serving.py "
+        "python3 -m infx.bench_serving.benchmark_serving "
         "--host localhost --port 8080 --model Qwen/Qwen3-8B --backend vllm "
         "--dataset-name random --save-result --result-dir . "
         "--result-filename inferencex-result.json "
