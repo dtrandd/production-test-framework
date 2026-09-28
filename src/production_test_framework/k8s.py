@@ -528,9 +528,18 @@ class KubernetesClient:
     # Cluster Operations
     # -------------------------------------------------------------------------
 
+    def apply_manifest(self, manifest: str, namespace: str) -> CommandResult:
+        """
+        Apply manifest YAML to a namespace, passing it to kubectl on stdin.
+
+        Takes the YAML itself rather than a path, so a caller that builds its
+        manifests in memory does not have to write them to disk first.
+        """
+        return self._run_kubectl(f"apply -n {namespace} -f -", stdin_data=manifest)
+
     def apply_manifest_file(self, manifest: Path, namespace: str) -> bool:
         """Apply a manifest file to the cluster."""
-        result = self._run_kubectl(f"apply -n {namespace} -f -", stdin_data=manifest.read_text())
+        result = self.apply_manifest(manifest.read_text(), namespace)
         print(f"manifest apply result: {result}")
         return result.success
 
