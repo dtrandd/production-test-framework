@@ -258,6 +258,26 @@ class TestKubernetesClient:
         mock_ssh.run_kubectl.assert_called_once()
         assert mock_ssh.run_kubectl.call_args[1]["stdin_data"] == "apiVersion: v1\nkind: ConfigMap\n"
 
+    def test_apply_manifest_file_failure(self, k8s_client, mock_ssh):
+        mock_ssh.run_kubectl.return_value = CommandResult(returncode=1, stdout="", stderr="invalid")
+        with patch.object(Path, "read_text", return_value="kind: ConfigMap\n"):
+            assert k8s_client.apply_manifest_file(Path("/tmp/manifest.yaml"), "default") is False
+
+    def test_apply_manifest_passes_text_on_stdin(self, k8s_client, mock_ssh):
+        mock_ssh.run_kubectl.return_value = CommandResult(returncode=0, stdout="configmap/x created", stderr="")
+        result = k8s_client.apply_manifest("apiVersion: v1\nkind: ConfigMap\n", "lgtma")
+        assert result.success
+        assert result.stdout == "configmap/x created"
+        args, kwargs = mock_ssh.run_kubectl.call_args
+        assert args[0] == "apply -n lgtma -f -"
+        assert kwargs["stdin_data"] == "apiVersion: v1\nkind: ConfigMap\n"
+
+    def test_apply_manifest_returns_kubectl_error(self, k8s_client, mock_ssh):
+        mock_ssh.run_kubectl.return_value = CommandResult(returncode=1, stdout="", stderr="error: bad manifest")
+        result = k8s_client.apply_manifest("not: [valid", "default")
+        assert not result.success
+        assert result.stderr == "error: bad manifest"
+
 
 class TestKubernetesClientWorkloadState:
     """Tests for the pod, workload, PVC and endpoint readers with mocked SSH."""
