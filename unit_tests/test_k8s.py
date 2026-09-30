@@ -278,6 +278,59 @@ class TestKubernetesClient:
         assert not result.success
         assert result.stderr == "error: bad manifest"
 
+    def test_current_context(self, k8s_client, mock_ssh):
+        mock_ssh.run_kubectl.return_value = CommandResult(returncode=0, stdout="k3d-mc", stderr="")
+        assert k8s_client.current_context() == "k3d-mc"
+        assert mock_ssh.run_kubectl.call_args[0][0] == "config current-context"
+
+    def test_current_context_none_when_unset(self, k8s_client, mock_ssh):
+        mock_ssh.run_kubectl.return_value = CommandResult(returncode=1, stdout="", stderr="current-context is not set")
+        assert k8s_client.current_context() is None
+
+    def test_get_secret_parses_json(self, k8s_client, mock_ssh):
+        payload = {"kind": "Secret", "data": {"client-id": "bWM="}}
+        mock_ssh.run_kubectl.return_value = CommandResult(returncode=0, stdout=json.dumps(payload), stderr="")
+        secret, result = k8s_client.get_secret("mc-auth", "mc")
+        assert secret == payload
+        assert result.success
+        assert mock_ssh.run_kubectl.call_args[0][0] == "get secret mc-auth -n mc -o json"
+
+    def test_get_secret_empty_on_failure(self, k8s_client, mock_ssh):
+        mock_ssh.run_kubectl.return_value = CommandResult(returncode=1, stdout="", stderr='secrets "x" not found')
+        secret, result = k8s_client.get_secret("x", "mc")
+        assert secret == {}
+        assert result.stderr == 'secrets "x" not found'
+
+
+class TestKubernetesClientLocalKubeconfig:
+    """Tests for which kubeconfig local kubectl is pointed at."""
+
+    @pytest.fixture
+    def local_client(self):
+        return KubernetesClient(LGTMConfig(host="localhost"), ssh=MagicMock())
+
+    def _kubectl_cmd(self, local_client) -> list[str]:
+        with patch("production_test_framework.k8s.run_command") as run:
+            run.return_value = CommandResult(returncode=0, stdout="", stderr="")
+            local_client._run_kubectl("get nodes")
+        return run.call_args[0][0]
+
+    def test_defaults_to_home_kubeconfig(self, local_client, monkeypatch):
+        monkeypatch.delenv("KUBECONFIG", raising=False)
+        cmd = self._kubectl_cmd(local_client)
+        assert cmd[:3] == ["kubectl", "--kubeconfig", str(Path("~/.kube/config").expanduser())]
+
+    def test_leaves_kubeconfig_env_to_kubectl(self, local_client, monkeypatch):
+        monkeypatch.setenv("KUBECONFIG", "/tmp/a:/tmp/b")
+        assert self._kubectl_cmd(local_client) == ["kubectl", "get", "nodes"]
+
+    def test_explicit_kubeconfig_wins(self, local_client, monkeypatch):
+        monkeypatch.setenv("KUBECONFIG", "/tmp/a")
+        with patch("production_test_framework.k8s.run_command") as run:
+            run.return_value = CommandResult(returncode=0, stdout="", stderr="")
+            local_client._run_kubectl_local("get nodes", kubeconfig="/tmp/explicit")
+        assert run.call_args[0][0] == ["kubectl", "--kubeconfig", "/tmp/explicit", "get", "nodes"]
+
 
 class TestKubernetesClientWorkloadState:
     """Tests for the pod, workload, PVC and endpoint readers with mocked SSH."""

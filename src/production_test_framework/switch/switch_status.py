@@ -242,8 +242,7 @@ def _resolve_log_level(level_name: str) -> int:
     level = logging.getLevelNamesMapping().get(normalized)
     if level is None:
         supported = ", ".join(sorted(logging.getLevelNamesMapping()))
-        print(f"error: unknown log level {level_name!r} (supported: {supported})", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(f"error: unknown log level {level_name!r} (supported: {supported})")
     return level
 
 
@@ -277,13 +276,11 @@ def resolve_password(args: dict) -> str:
     if sys.stdin.isatty():
         entered = getpass("Password: ")
         if not entered:
-            print("error: empty password", file=sys.stderr)
-            sys.exit(2)
+            sys.exit("error: empty password")
         return entered
     entered = sys.stdin.read().rstrip("\n")
     if not entered:
-        print("error: empty password on stdin", file=sys.stderr)
-        sys.exit(2)
+        sys.exit("error: empty password on stdin")
     return entered
 
 
@@ -296,8 +293,7 @@ def create_switch(
     """Instantiate a switch client for the given driver name."""
     if switch_type not in _SWITCH_TYPES:
         supported = ", ".join(sorted(_SWITCH_TYPES))
-        print(f"error: unknown switch-type {switch_type!r} (supported: {supported})", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(f"error: unknown switch-type {switch_type!r} (supported: {supported})")
 
     if switch_type == NVIDIA_SWITCH_TYPE:
         config = NetworkSwitchConfig(
