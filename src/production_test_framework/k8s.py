@@ -41,6 +41,10 @@ RECENT_RESTART_WINDOW_S = 24 * 60 * 60
 # Node conditions that stop a pod being scheduled or get it evicted, when True.
 NODE_PRESSURE_CONDITIONS = ("MemoryPressure", "DiskPressure", "PIDPressure", "NetworkUnavailable")
 
+# How much of each pod's history pod_report() carries by default.
+POD_REPORT_EVENTS = 15
+POD_REPORT_LOG_LINES = 60
+
 
 def _describe_age(seconds: float) -> str:
     """
@@ -434,6 +438,59 @@ class KubernetesClient:
 
         return self.pods_by_selector(namespace, selector), result
 
+    def pod_report(
+        self,
+        namespace: str,
+        selector: str,
+        *,
+        events: int = POD_REPORT_EVENTS,
+        log_lines: int = POD_REPORT_LOG_LINES,
+    ) -> str:
+        """
+        Everything needed to tell why the pods behind a selector did not come up.
+
+        Their status, recent events, each container's current and previous logs,
+        and the node conditions, as one block of text for a failure message.
+        """
+        listed = self._run_kubectl(f"get pods -n {namespace} -l {selector} -o wide")
+        if not listed.success:
+            return f"could not list pods matching {selector} in {namespace}: {listed.stderr.strip()}"
+
+        rows = listed.stdout.strip().splitlines()
+        lines = [f"--- pods matching {selector} in {namespace}"] + [f"  {row}" for row in rows or ["none"]]
+
+        pods = self._run_kubectl(f"get pods -n {namespace} -l {selector} -o json")
+        for pod in json.loads(pods.stdout).get("items", []) if pods.success else []:
+            name = pod["metadata"]["name"]
+            recent = self._run_kubectl(
+                f"get events -n {namespace} --field-selector involvedObject.name={name} --sort-by=.lastTimestamp"
+            )
+            event_rows = recent.stdout.strip().splitlines() if recent.success else [recent.stderr.strip()]
+            lines.append(f"--- events for {name} (last {events})")
+            lines += [f"  {row}" for row in event_rows[-events:] or ["none"]]
+
+            # One container at a time: --all-containers gives up on the whole pod while
+            # it is still initializing, which loses the init container a Pending pod is
+            # stuck in. Previous logs only exist for a container that has restarted.
+            status = pod.get("status", {})
+            for container in status.get("initContainerStatuses", []) + status.get("containerStatuses", []):
+                for flag in [""] + (["--previous"] if container.get("restartCount", 0) else []):
+                    logs = self._run_kubectl(
+                        f"logs {name} -n {namespace} -c {container['name']} --tail={log_lines} {flag}"
+                    )
+                    log_rows = logs.stdout.strip().splitlines() if logs.success else [logs.stderr.strip()]
+                    which = " (previous, crashed)" if flag else ""
+                    lines.append(f"--- logs of {name}/{container['name']}{which} (last {log_lines} lines)")
+                    lines += [f"  {row}" for row in log_rows or ["none"]]
+
+        nodes, result = self.node_conditions()
+        lines.append("--- node conditions")
+        if result.success:
+            lines += [f"  {row}" for row in nodes] or ["  none"]
+        else:
+            lines.append(f"  could not list nodes: {result.stderr.strip()}")
+        return "\n".join(lines)
+
     # -------------------------------------------------------------------------
     # Workload Operations
     # -------------------------------------------------------------------------
@@ -546,12 +603,27 @@ class KubernetesClient:
     def service_endpoint_addresses(self, namespace: str, service: str) -> list[str]:
         """
         Get the ready endpoint addresses of a service, empty if it has none.
+
+        Not-ready and terminating endpoints are left out, so a wait on this does not
+        return while a replacement pod is still starting.
         """
         result = self._run_kubectl(
             f"get endpointslices -n {namespace} -l kubernetes.io/service-name={service} "
-            "-o jsonpath='{.items[*].endpoints[*].addresses[*]}'"
+            "-o jsonpath='{.items[*].endpoints[?(@.conditions.ready==true)].addresses[*]}'"
         )
         return result.stdout.split() if result.success else []
+
+    def service_pod_report(self, namespace: str, service: str) -> str:
+        """
+        pod_report() for the pods a service selects.
+        """
+        result = self._run_kubectl(f"get service {service} -n {namespace} -o json")
+        if not result.success:
+            return f"could not read svc/{service} in {namespace}: {result.stderr.strip()}"
+        selector = json.loads(result.stdout).get("spec", {}).get("selector") or {}
+        if not selector:
+            return f"svc/{service} in {namespace} has no selector, so there are no pods to report on"
+        return self.pod_report(namespace, ",".join(f"{key}={value}" for key, value in selector.items()))
 
     # -------------------------------------------------------------------------
     # Cluster Operations

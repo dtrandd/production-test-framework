@@ -509,6 +509,150 @@ class TestKubernetesClientWorkloadState:
         mock_ssh.run_kubectl.return_value = CommandResult(returncode=1, stdout="", stderr="boom")
         assert k8s_client.service_endpoint_addresses("lgtma", "loki-gateway") == []
 
+    def test_service_endpoint_addresses_only_asks_for_ready_endpoints(self, k8s_client, mock_ssh):
+        mock_ssh.run_kubectl.return_value = CommandResult(returncode=0, stdout="10.42.0.5", stderr="")
+
+        k8s_client.service_endpoint_addresses("lgtma", "grafana")
+
+        assert "endpoints[?(@.conditions.ready==true)]" in mock_ssh.run_kubectl.call_args[0][0]
+
+    # -------------------------------------------------------------------------
+    # pod_report / service_pod_report
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _fake_kubectl(responses: dict[str, CommandResult]):
+        """
+        A run_kubectl stand-in answering by the first key found in the command.
+
+        Unmatched commands fail, so a test only has to describe what it cares about.
+        """
+
+        def run(args, **_kwargs):
+            for key, response in responses.items():
+                if key in args:
+                    return response
+            return CommandResult(returncode=1, stdout="", stderr=f"unexpected: {args}")
+
+        return run
+
+    @staticmethod
+    def _ok(stdout: str) -> CommandResult:
+        return CommandResult(returncode=0, stdout=stdout, stderr="")
+
+    @staticmethod
+    def _report_pod_json(name: str, *, init: tuple[str, ...] = (), containers: dict[str, int] | None = None) -> str:
+        """`get pods -o json` for one pod: init container names, and {container: restartCount}."""
+        return json.dumps(
+            {
+                "items": [
+                    {
+                        "metadata": {"name": name},
+                        "status": {
+                            "initContainerStatuses": [{"name": c, "restartCount": 0} for c in init],
+                            "containerStatuses": [
+                                {"name": c, "restartCount": restarts} for c, restarts in (containers or {}).items()
+                            ],
+                        },
+                    }
+                ]
+            }
+        )
+
+    def test_pod_report_covers_a_pod_stuck_initializing(self, k8s_client, mock_ssh):
+        mock_ssh.run_kubectl.side_effect = self._fake_kubectl(
+            {
+                "-o wide": self._ok("NAME      READY   STATUS     RESTARTS\ngrafana-0 0/1     Init:0/1   0\n"),
+                "get pods -n lgtma -l app=grafana -o json": self._ok(
+                    self._report_pod_json("grafana-0", init=("init-chown-data",), containers={"grafana": 0})
+                ),
+                "get events": self._ok("LAST SEEN   TYPE   REASON\n5s   Normal   Pulling\n"),
+                "-c init-chown-data": self._ok("chown: changing ownership\n"),
+                "-c grafana": CommandResult(returncode=1, stdout="", stderr="waiting to start: PodInitializing"),
+                "get nodes -o json": self._ok(json.dumps({"items": []})),
+            }
+        )
+
+        report = k8s_client.pod_report("lgtma", "app=grafana")
+
+        assert "--- pods matching app=grafana in lgtma" in report
+        assert "Init:0/1" in report
+        assert "5s   Normal   Pulling" in report
+        # The init container a Pending pod is stuck in is reported on its own ...
+        assert "--- logs of grafana-0/init-chown-data (last 60 lines)\n  chown: changing ownership" in report
+        # ... and a container that has not started yet reports why instead of hiding the others.
+        assert "waiting to start: PodInitializing" in report
+        assert "--- node conditions\n  none" in report
+        commands = [call[0][0] for call in mock_ssh.run_kubectl.call_args_list]
+        assert not any("--previous" in command for command in commands)
+
+    def test_pod_report_fetches_previous_logs_for_a_restarted_container(self, k8s_client, mock_ssh):
+        mock_ssh.run_kubectl.side_effect = self._fake_kubectl(
+            {
+                "-o wide": self._ok(
+                    "NAME   READY   STATUS             RESTARTS\nweb-0  0/1     CrashLoopBackOff   3\n"
+                ),
+                "get pods -n apps -l app=web -o json": self._ok(self._report_pod_json("web-0", containers={"web": 3})),
+                "get events": self._ok(""),
+                "--previous": self._ok("panic: database is locked\n"),
+                "-c web": self._ok("starting\n"),
+                "get nodes -o json": self._ok(json.dumps({"items": []})),
+            }
+        )
+
+        report = k8s_client.pod_report("apps", "app=web")
+
+        assert "--- logs of web-0/web (last 60 lines)\n  starting" in report
+        assert "--- logs of web-0/web (previous, crashed) (last 60 lines)\n  panic: database is locked" in report
+
+    def test_pod_report_keeps_only_the_latest_events(self, k8s_client, mock_ssh):
+        events = "LAST SEEN   TYPE   REASON\n" + "".join(f"{n}s   Normal   Event{n}\n" for n in range(10))
+        mock_ssh.run_kubectl.side_effect = self._fake_kubectl(
+            {
+                "-o wide": self._ok("NAME   READY\nweb-0  1/1\n"),
+                "get pods -n apps -l app=web -o json": self._ok(self._report_pod_json("web-0")),
+                "get events": self._ok(events),
+                "get nodes -o json": self._ok(json.dumps({"items": []})),
+            }
+        )
+
+        report = k8s_client.pod_report("apps", "app=web", events=2)
+
+        assert "--- events for web-0 (last 2)\n  8s   Normal   Event8\n  9s   Normal   Event9\n" in report
+        assert "Event7" not in report
+
+    def test_pod_report_when_pods_cannot_be_listed(self, k8s_client, mock_ssh):
+        mock_ssh.run_kubectl.return_value = CommandResult(returncode=1, stdout="", stderr="forbidden")
+
+        report = k8s_client.pod_report("apps", "app=web")
+
+        assert report == "could not list pods matching app=web in apps: forbidden"
+
+    def test_service_pod_report_reports_on_the_service_selector(self, k8s_client):
+        service = {"spec": {"selector": {"app.kubernetes.io/name": "grafana", "app.kubernetes.io/instance": "grafana"}}}
+        with (
+            patch.object(k8s_client, "_run_kubectl", return_value=self._ok(json.dumps(service))) as run,
+            patch.object(k8s_client, "pod_report", return_value="report") as pod_report,
+        ):
+            assert k8s_client.service_pod_report("lgtma", "grafana") == "report"
+
+        assert run.call_args[0][0] == "get service grafana -n lgtma -o json"
+        pod_report.assert_called_once_with("lgtma", "app.kubernetes.io/name=grafana,app.kubernetes.io/instance=grafana")
+
+    def test_service_pod_report_without_a_selector(self, k8s_client, mock_ssh):
+        mock_ssh.run_kubectl.return_value = self._ok(json.dumps({"spec": {}}))
+
+        report = k8s_client.service_pod_report("default", "external")
+
+        assert report == "svc/external in default has no selector, so there are no pods to report on"
+
+    def test_service_pod_report_when_the_service_cannot_be_read(self, k8s_client, mock_ssh):
+        mock_ssh.run_kubectl.return_value = CommandResult(returncode=1, stdout="", stderr="not found")
+
+        report = k8s_client.service_pod_report("lgtma", "grafana")
+
+        assert report == "could not read svc/grafana in lgtma: not found"
+
     # -------------------------------------------------------------------------
     # unstable_pods
     # -------------------------------------------------------------------------
