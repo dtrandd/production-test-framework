@@ -38,6 +38,9 @@ MAX_POD_RESTARTS = 10
 # for as long as those pods live, which on a long-lived cluster is indefinitely.
 RECENT_RESTART_WINDOW_S = 24 * 60 * 60
 
+# Node conditions that stop a pod being scheduled or get it evicted, when True.
+NODE_PRESSURE_CONDITIONS = ("MemoryPressure", "DiskPressure", "PIDPressure", "NetworkUnavailable")
+
 
 def _describe_age(seconds: float) -> str:
     """
@@ -167,6 +170,32 @@ class KubernetesClient:
         """Check if all nodes are in Ready state."""
         nodes, result = self.get_nodes()
         return result.success and all(n.is_ready for n in nodes)
+
+    def node_conditions(self) -> tuple[list[str], CommandResult]:
+        """
+        Describe each node: its Ready condition, plus any pressure condition that is True.
+
+        A pressure condition is what keeps a pod Pending or gets it evicted, so this
+        explains a pod that will not come up without having to describe the node.
+        """
+        result = self._run_kubectl("get nodes -o json")
+        if not result.success:
+            return [], result
+
+        lines = []
+        for node in json.loads(result.stdout).get("items", []):
+            conditions = {c["type"]: c for c in node.get("status", {}).get("conditions", [])}
+            ready = conditions.get("Ready", {})
+            pressure = [
+                f"{name} ({conditions[name].get('message', '')})"
+                for name in NODE_PRESSURE_CONDITIONS
+                if conditions.get(name, {}).get("status") == "True"
+            ]
+            lines.append(
+                f"{node['metadata']['name']}: Ready={ready.get('status', '?')} ({ready.get('reason', '')})"
+                + (f", {', '.join(pressure)}" if pressure else ", no pressure conditions")
+            )
+        return lines, result
 
     # -------------------------------------------------------------------------
     # Pod Operations

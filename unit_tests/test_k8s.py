@@ -115,6 +115,70 @@ class TestKubernetesClient:
         )
         assert k8s_client.all_nodes_ready() is False
 
+    @staticmethod
+    def _nodes_json(*nodes: tuple[str, dict[str, tuple[str, str]]]) -> str:
+        """`get nodes -o json` for (name, {condition type: (status, message)}) pairs."""
+        return json.dumps(
+            {
+                "items": [
+                    {
+                        "metadata": {"name": name},
+                        "status": {
+                            "conditions": [
+                                {"type": kind, "status": status, "reason": "KubeletReady", "message": message}
+                                for kind, (status, message) in conditions.items()
+                            ]
+                        },
+                    }
+                    for name, conditions in nodes
+                ]
+            }
+        )
+
+    def test_node_conditions_healthy_node(self, k8s_client, mock_ssh):
+        mock_ssh.run_kubectl.return_value = CommandResult(
+            returncode=0,
+            stdout=self._nodes_json(("node1", {"Ready": ("True", ""), "DiskPressure": ("False", "")})),
+            stderr="",
+        )
+
+        lines, result = k8s_client.node_conditions()
+
+        assert result.success is True
+        assert lines == ["node1: Ready=True (KubeletReady), no pressure conditions"]
+
+    def test_node_conditions_reports_only_true_pressure(self, k8s_client, mock_ssh):
+        mock_ssh.run_kubectl.return_value = CommandResult(
+            returncode=0,
+            stdout=self._nodes_json(
+                (
+                    "node1",
+                    {
+                        "Ready": ("True", ""),
+                        "DiskPressure": ("True", "kubelet has disk pressure"),
+                        "MemoryPressure": ("False", "kubelet has sufficient memory"),
+                    },
+                ),
+                ("node2", {"Ready": ("False", "")}),
+            ),
+            stderr="",
+        )
+
+        lines, _ = k8s_client.node_conditions()
+
+        assert lines == [
+            "node1: Ready=True (KubeletReady), DiskPressure (kubelet has disk pressure)",
+            "node2: Ready=False (KubeletReady), no pressure conditions",
+        ]
+
+    def test_node_conditions_kubectl_failure(self, k8s_client, mock_ssh):
+        mock_ssh.run_kubectl.return_value = CommandResult(returncode=1, stdout="", stderr="connection refused")
+
+        lines, result = k8s_client.node_conditions()
+
+        assert lines == []
+        assert result.success is False
+
     def test_get_pods_all_namespaces(self, k8s_client, mock_ssh):
         mock_ssh.run_kubectl.return_value = CommandResult(
             returncode=0,
