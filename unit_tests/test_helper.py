@@ -216,9 +216,6 @@ class TestFittedRise:
         assert rise == pytest.approx(0.20)
 
     def test_sawtooth_that_comes_back_down_fits_flat(self):
-        # A garbage collector's sawtooth over ten swings: a 10% min-max range, but no
-        # climb. Where the samples start and stop in a swing tilts the line a little,
-        # less the more swings they span.
         samples = [100.0, 105.0, 110.0] * 10
 
         _, _, rise = fitted_rise(samples)

@@ -204,23 +204,6 @@ def poll_until(
 def fitted_rise(samples: list[float], *, settle: int = 0) -> tuple[float, float, float]:
     """
     Measure how far a sampled indicator climbed, by the straight line fitted through it.
-
-    For judging whether a level held steady under a fixed load. Unlike a min-max
-    range, a swing that comes back down -- a garbage collector's sawtooth, say --
-    fits a near-flat line across several swings and does not count, while a level
-    that keeps climbing counts in full.
-
-    Args:
-        samples: Readings in the order they were taken, at a regular interval.
-        settle: Leading samples to leave out, such as those taken while the level
-            was still settling to a new load. Ignored when fewer than three
-            samples would remain.
-
-    Returns:
-        (start, end, rise): the fitted line's values at the first and last sample it
-        was fitted to, and how far end sits above start as a share of start. All
-        zero when there are fewer than two samples, and rise is zero when start is
-        not positive.
     """
     kept = samples[settle:] if len(samples) - settle >= 3 else samples
     if len(kept) < 2:
@@ -333,9 +316,12 @@ def power_cycle_via_ssh(host: str, username: str, sudo_password: str | None = No
     Uses the local ssh (agent, ~/.ssh/config, known_hosts); sudo reads the password from stdin.
     """
     cmd = [
-        "ssh", "-A",
-        "-o", "BatchMode=yes",
-        "-o", "StrictHostKeyChecking=accept-new",
+        "ssh",
+        "-A",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
         f"{username}@{host}",
         "sudo -S -p '' ipmitool chassis power cycle",
     ]
