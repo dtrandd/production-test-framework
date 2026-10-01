@@ -9,6 +9,7 @@ Provides reusable utilities for testing.
 
 import logging
 import socket
+import statistics
 import subprocess
 import threading
 import time
@@ -201,6 +202,21 @@ def poll_until(
         time.sleep(interval)
         result = predicate()
     return result
+
+
+def fitted_rise(samples: list[float], *, settle: int = 0) -> tuple[float, float, float]:
+    """
+    Measure how far a sampled indicator climbed, by the straight line fitted through it.
+
+    This is to determine if a memory drift is in fact a trend and not a range to
+    determine whether the drift is a valid test failure.
+    """
+    kept = samples[settle:] if len(samples) - settle >= 3 else samples
+    if len(kept) < 2:
+        return 0.0, 0.0, 0.0
+    slope, intercept = statistics.linear_regression(range(len(kept)), kept)
+    start, end = intercept, intercept + slope * (len(kept) - 1)
+    return start, end, end / start - 1.0 if start > 0 else 0.0
 
 
 def check_tcp_connectivity(host: str, port: int, timeout: float = 5.0) -> bool:

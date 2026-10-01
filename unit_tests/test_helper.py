@@ -7,8 +7,11 @@ import threading
 import time
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from production_test_framework.helper import (
     check_tcp_connectivity,
+    fitted_rise,
     get_mimir_base_url,
     is_localhost,
     ping,
@@ -198,6 +201,51 @@ class TestPollUntil:
         mock_monotonic.side_effect = [0, 0, 100]
 
         assert poll_until(lambda: False, timeout=10, interval=1) is False
+
+
+class TestFittedRise:
+    """Tests for fitted_rise."""
+
+    def test_steady_climb_counts_in_full(self):
+        samples = [100.0 + 2.0 * i for i in range(11)]  # 100 -> 120
+
+        start, end, rise = fitted_rise(samples)
+
+        assert start == pytest.approx(100.0)
+        assert end == pytest.approx(120.0)
+        assert rise == pytest.approx(0.20)
+
+    def test_sawtooth_that_comes_back_down_fits_flat(self):
+        samples = [100.0, 105.0, 110.0] * 10
+
+        _, _, rise = fitted_rise(samples)
+
+        assert (max(samples) - min(samples)) / min(samples) == pytest.approx(0.10)
+        assert abs(rise) < 0.02
+
+    def test_falling_level_is_a_negative_rise(self):
+        _, _, rise = fitted_rise([120.0, 110.0, 100.0])
+
+        assert rise == pytest.approx(100.0 / 120.0 - 1.0)
+
+    def test_settle_leaves_out_the_leading_samples(self):
+        # Climbs while settling to the load, then holds flat.
+        samples = [60.0, 80.0, 100.0, 100.0, 100.0, 100.0, 100.0]
+
+        assert fitted_rise(samples)[2] > 0.1
+        assert fitted_rise(samples, settle=2) == pytest.approx((100.0, 100.0, 0.0))
+
+    def test_settle_is_ignored_when_fewer_than_three_samples_would_remain(self):
+        samples = [100.0, 110.0, 120.0, 130.0]
+
+        assert fitted_rise(samples, settle=2) == fitted_rise(samples)
+
+    def test_too_few_samples_is_all_zero(self):
+        assert fitted_rise([]) == (0.0, 0.0, 0.0)
+        assert fitted_rise([5.0]) == (0.0, 0.0, 0.0)
+
+    def test_no_rise_from_a_non_positive_start(self):
+        assert fitted_rise([0.0, 0.0, 0.0])[2] == 0.0
 
 
 class TestWaitForTcpConnectivity:
