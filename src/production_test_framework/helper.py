@@ -205,7 +205,7 @@ def fitted_rise(samples: list[float], *, settle: int = 0) -> tuple[float, float,
     """
     Measure how far a sampled indicator climbed, by the straight line fitted through it.
 
-    This is to determine if an Alloy memory drift is in fact a trend and not a range to
+    This is to determine if a memory drift is in fact a trend and not a range to
     determine whether the drift is a valid test failure.
     """
     kept = samples[settle:] if len(samples) - settle >= 3 else samples
