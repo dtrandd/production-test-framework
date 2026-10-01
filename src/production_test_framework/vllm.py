@@ -7,10 +7,13 @@ vLLM inference client for testing.
 Provides a reusable client for vLLM inference.
 """
 
+import logging
 import time
 from dataclasses import dataclass, field
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "Qwen/Qwen3-8B"
 
@@ -105,12 +108,12 @@ class VllmClient:
             attempt += 1
             if self.health_check():
                 elapsed = time.time() - start_time
-                print(f"\n  vLLM server ready after {elapsed:.1f}s")
+                logger.info("vLLM server ready after %.1fs", elapsed)
                 return True
 
             if attempt % 3 == 0:  # Log every ~15 seconds
                 elapsed = time.time() - start_time
-                print(f"  Waiting for vLLM server to be ready... {elapsed:.0f}s elapsed")
+                logger.info("Waiting for vLLM server to be ready... %.0fs elapsed", elapsed)
 
             time.sleep(poll_interval)
 

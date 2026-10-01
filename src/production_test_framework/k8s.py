@@ -9,6 +9,8 @@ with support for both local kubectl and remote k3s kubectl via SSH.
 """
 
 import json
+import logging
+import os
 import shlex
 import socket
 import subprocess
@@ -21,6 +23,8 @@ from pathlib import Path
 from production_test_framework.config import LGTMConfig
 from production_test_framework.helper import is_localhost, poll_until, run_command
 from production_test_framework.ssh import CommandResult, SSHExecutor
+
+logger = logging.getLogger(__name__)
 
 WORKLOAD_READINESS_JSONPATH = {
     "deployment": "{.spec.replicas},{.status.readyReplicas},{.status.availableReplicas}",
@@ -116,13 +120,21 @@ class KubernetesClient:
         self,
         args: str,
         timeout: int = 60,
-        kubeconfig: str = "~/.kube/config",
+        kubeconfig: str | None = None,
         stdin_data: str | None = None,
     ) -> CommandResult:
-        """Run kubectl on the local machine."""
-        kube_path = str(Path(kubeconfig).expanduser())
+        """
+        Run kubectl on the local machine.
+
+        With no kubeconfig given, a set KUBECONFIG is left for kubectl to resolve itself, since
+        it may be a colon-separated list that --kubeconfig cannot take. Otherwise
+        ~/.kube/config is used.
+        """
+        if kubeconfig is None and not os.environ.get("KUBECONFIG"):
+            kubeconfig = "~/.kube/config"
+        kube_args = ["--kubeconfig", str(Path(kubeconfig).expanduser())] if kubeconfig else []
         try:
-            cmd = ["kubectl", "--kubeconfig", kube_path] + shlex.split(args)
+            cmd = ["kubectl", *kube_args] + shlex.split(args)
         except ValueError as e:
             return CommandResult(returncode=-1, stdout="", stderr=f"Invalid kubectl args: {e}")
         return run_command(cmd, timeout=timeout, stdin_data=stdin_data)
@@ -626,6 +638,25 @@ class KubernetesClient:
         return self.pod_report(namespace, ",".join(f"{key}={value}" for key, value in selector.items()))
 
     # -------------------------------------------------------------------------
+    # Config and Secret Operations
+    # -------------------------------------------------------------------------
+
+    def current_context(self) -> str | None:
+        """Get the kubeconfig context kubectl is using, None when it cannot say."""
+        result = self._run_kubectl("config current-context", timeout=10)
+        return result.stdout if result.success and result.stdout else None
+
+    def get_secret(self, name: str, namespace: str) -> tuple[dict, CommandResult]:
+        """
+        Get a secret as its JSON object, empty when it cannot be read.
+
+        The values under "data" are still base64-encoded, as the API returns them.
+        """
+        result = self._run_kubectl(f"get secret {name} -n {namespace} -o json", timeout=30)
+        secret = json.loads(result.stdout) if result.success else {}
+        return secret, result
+
+    # -------------------------------------------------------------------------
     # Cluster Operations
     # -------------------------------------------------------------------------
 
@@ -641,7 +672,10 @@ class KubernetesClient:
     def apply_manifest_file(self, manifest: Path, namespace: str) -> bool:
         """Apply a manifest file to the cluster."""
         result = self.apply_manifest(manifest.read_text(), namespace)
-        print(f"manifest apply result: {result}")
+        if result.success:
+            logger.info("applied %s to namespace %s", manifest, namespace)
+        else:
+            logger.error("applying %s to namespace %s failed: %s", manifest, namespace, result.stderr)
         return result.success
 
 
@@ -835,13 +869,14 @@ class KubectlPortForwarder:
         # nothing, start_service_tunnel reports success, and the caller's first
         # request dies with "connection reset by peer" instead of a tunnel error.
         if wait_ready and not self._wait_for_remote_listener(remote_kubectl_port, ready_timeout):
-            print(
-                f"  kubectl port-forward did not bind 127.0.0.1:{remote_kubectl_port} "
-                f"on the remote host within {ready_timeout}s"
+            logger.error(
+                "kubectl port-forward did not bind 127.0.0.1:%s on the remote host within %ss",
+                remote_kubectl_port,
+                ready_timeout,
             )
             log = self._ssh.run(f"tail -n 5 {log_path}")
             if log.stdout:
-                print(f"  kubectl output:\n{log.stdout}")
+                logger.error("kubectl output:\n%s", log.stdout)
             return False
 
         # Start SSH tunnel from local port to remote kubectl port

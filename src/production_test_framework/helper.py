@@ -7,6 +7,7 @@ Helper functions for testing.
 Provides reusable utilities for testing.
 """
 
+import logging
 import socket
 import subprocess
 import threading
@@ -16,6 +17,8 @@ from collections.abc import Callable
 import requests
 
 from production_test_framework.ssh import CommandResult
+
+logger = logging.getLogger(__name__)
 
 
 def is_localhost(host: str) -> bool:
@@ -227,7 +230,7 @@ def wait_for_tcp_connectivity(host: str, port: int, timeout: float = 30) -> bool
     poll_interval = 0.5
     for i in range(int(timeout / poll_interval)):
         if i % 10 == 0:
-            print(f"Waiting for TCP connectivity to {host}:{port}... {i}s")
+            logger.info("Waiting for TCP connectivity to %s:%s... %.0fs", host, port, i * poll_interval)
         if check_tcp_connectivity(host, port):
             return True
         time.sleep(poll_interval)
@@ -303,9 +306,12 @@ def power_cycle_via_ssh(host: str, username: str, sudo_password: str | None = No
     Uses the local ssh (agent, ~/.ssh/config, known_hosts); sudo reads the password from stdin.
     """
     cmd = [
-        "ssh", "-A",
-        "-o", "BatchMode=yes",
-        "-o", "StrictHostKeyChecking=accept-new",
+        "ssh",
+        "-A",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
         f"{username}@{host}",
         "sudo -S -p '' ipmitool chassis power cycle",
     ]
