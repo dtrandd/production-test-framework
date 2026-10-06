@@ -6,6 +6,7 @@ Sink-agnostic building blocks for a report: number formatting, tables, status vo
 
 import html
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -14,8 +15,6 @@ __all__ = [
     "COMPACT_DECIMALS",
     "SIGNIFICANT_DECIMALS",
     "STATUS_CLASS",
-    "CoverageStatus",
-    "MetricStatus",
     "ReportFormat",
     "Table",
     "format_delta",
@@ -43,68 +42,10 @@ class ReportFormat(StrEnum):
         return cls.MD if path.suffix.lower() in (".md", ".markdown") else cls.HTML
 
 
-class MetricStatus(StrEnum):
-    """
-    What happened to one expected metric across a workload.
-
-    The three cases need different fixes, which is the whole reason the suite distinguishes them:
-
-    * :attr:`ROSE` -- the total increased; the profiler and the pipeline both work.
-    * :attr:`FLAT` -- the series exists and is being scraped, but this workload drove no NCCL
-      ops through it. The exporter is alive; either the instrumentation for this metric is not
-      recording, or the workload genuinely does not exercise it.
-    * :attr:`NO_SERIES` -- Prometheus has no series under this name at all, so nothing was ever
-      exported. Check the profiler plugin, the OTLP endpoint and the collector.
-    """
-
-    ROSE = "rose"
-    FLAT = "flat"
-    NO_SERIES = "no series"
-
-    @property
-    def is_failure(self) -> bool:
-        return self is not MetricStatus.ROSE
-
-    @property
-    def remedy(self) -> str:
-        """One line on what to look at, shown beside a metric that did not increase."""
-        match self:
-            case MetricStatus.ROSE:
-                return ""
-            case MetricStatus.FLAT:
-                return "scraped but did not move -- workload drove no ops through it"
-            case MetricStatus.NO_SERIES:
-                return "never exported -- check the profiler plugin, OTLP endpoint and collector"
-
-    @classmethod
-    def for_metric(cls, rose: bool, current: float | None) -> MetricStatus:
-        """Classify one metric from whether it rose and whether it has a series at all."""
-        if rose:
-            return cls.ROSE
-        return cls.NO_SERIES if current is None else cls.FLAT
-
-
-class CoverageStatus(StrEnum):
-    """Whether a participant count met the profile's declared coverage."""
-
-    OK = "ok"
-    SHORT = "short"
-
-    @property
-    def is_failure(self) -> bool:
-        return self is CoverageStatus.SHORT
-
-    @classmethod
-    def for_counts(cls, seen: int, expected: int) -> CoverageStatus:
-        return cls.OK if seen >= expected else cls.SHORT
-
-
+#: How a status cell is coloured: ``ok``, ``warn`` or ``bad``, keyed by the cell's text. Only
+#: pytest's own outcomes are known here; a table adds its suite's statuses with
+#: ``status_classes``.
 STATUS_CLASS = {
-    MetricStatus.ROSE.value: "ok",
-    MetricStatus.FLAT.value: "warn",
-    MetricStatus.NO_SERIES.value: "bad",
-    CoverageStatus.OK.value: "ok",
-    CoverageStatus.SHORT.value: "bad",
     "passed": "ok",
     "failed": "bad",
     "error": "bad",
@@ -206,6 +147,7 @@ class Table:
     title: str = ""
     left: set[int] = field(default_factory=set)
     status_column: int | None = None
+    status_classes: Mapping[str, str] = field(default_factory=dict)
 
 
 def render_table(table: Table, indent: str = "  ") -> str:
@@ -236,7 +178,7 @@ def render_table_html(table: Table) -> str:
     def cell(tag: str, index: int, text: str) -> str:
         classes = [] if index in left_aligned else ["num"]
         if tag == "td" and index == table.status_column:
-            classes.append(STATUS_CLASS.get(text, ""))
+            classes.append(table.status_classes.get(text) or STATUS_CLASS.get(text, ""))
         present = [c for c in classes if c]
         attr = f" class='{' '.join(present)}'" if present else ""
         return f"<{tag}{attr}>{html.escape(text)}</{tag}>"

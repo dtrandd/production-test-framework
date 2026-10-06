@@ -37,8 +37,6 @@ from .environment import (
 from .formatting import (
     COMPACT_DECIMALS,
     SIGNIFICANT_DECIMALS,
-    CoverageStatus,
-    MetricStatus,
     ReportFormat,
     Table,
     format_delta,
@@ -56,9 +54,7 @@ __all__ = [
     "COMPACT_DECIMALS",
     "DEFAULT_TITLE",
     "SIGNIFICANT_DECIMALS",
-    "CoverageStatus",
     "Logo",
-    "MetricStatus",
     "ReportFormat",
     "ReportPlugin",
     "Reporter",

@@ -17,6 +17,7 @@ whatever the suite chooses to record, so a suite that records nothing still gets
 
 import datetime as dt
 import html
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -312,14 +313,21 @@ class Reporter:
         title: str = "",
         left: set[int] | None = None,
         status_column: int | None = None,
+        status_classes: Mapping[str, str] | None = None,
     ) -> None:
-        """Add one table. Cells must already be strings -- use the ``format_*`` helpers."""
+        """
+        Add one table. Cells must already be strings -- use the ``format_*`` helpers.
+
+        *status_column* is coloured by its text: pytest's outcomes are known already, and
+        *status_classes* maps any other status this table uses to ``ok``, ``warn`` or ``bad``.
+        """
         built = Table(
             headers=headers,
             rows=[[str(cell) for cell in row] for row in rows],
             title=title,
             left=left or set(),
             status_column=status_column,
+            status_classes=status_classes or {},
         )
         if not self.writes_file:
             if title:

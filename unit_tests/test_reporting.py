@@ -468,6 +468,25 @@ class TestRunRows:
         assert rows[-1] == ["CI pipeline", "https://gitlab.example/p/1"]
 
 
+class TestStatusClasses:
+    """A status column is coloured by its text, from pytest's outcomes and the table's own map."""
+
+    def cell_class(self, report, value, **kwargs):
+        report.table(["name", "status"], [["a", value]], status_column=1, **kwargs)
+        html = rendered(report)
+        return html.split(f">{value}</td>")[0].rsplit("<td", 1)[1]
+
+    def test_pytest_outcomes_are_known(self, report):
+        assert "bad" in self.cell_class(report, "failed")
+
+    def test_an_unknown_status_is_left_plain(self, report):
+        # Only the numeric alignment every right-aligned cell carries.
+        assert self.cell_class(report, "wobbly") == " class='num'"
+
+    def test_a_table_names_its_own_statuses(self, report):
+        assert "warn" in self.cell_class(report, "wobbly", status_classes={"wobbly": "warn"})
+
+
 class TestStdoutMode:
     """Without a path the tables print instead, and nothing is written."""
 
