@@ -19,6 +19,7 @@ from production_test_framework.switch.models import (
     NetworkSwitchConfig,
     NetworkSwitchStatus,
     Port,
+    PortBridge,
     Vlan,
 )
 from production_test_framework.switch.network_switch import NetworkSwitch
@@ -32,6 +33,7 @@ from production_test_framework.switch.nvidia.nvue_paths import (
     REVISION_PATH,
     SYSTEM_PATH,
     bridge_domain_vlan_path,
+    interface_bridge_domain_path,
     interface_bridge_vlan_path,
     interface_path,
     revision_path,
@@ -52,6 +54,9 @@ VIEW_LLDP_DETAIL = "lldp-detail"
 # reported alongside them and are not data ports.
 _SWP_PREFIX = "swp"
 
+# NVUE spells the bridge learning key "on"/"off" before 5.15 and "enabled"/"disabled" from it.
+_LEARNING_VALUES = {"on": True, "enabled": True, "off": False, "disabled": False}
+
 # NVUE applies config changes asynchronously once a changeset is applied.
 _APPLY_TIMEOUT_S = 60.0
 _APPLY_INTERVAL_S = 1.0
@@ -61,6 +66,17 @@ _APPLY_ERROR_STATES = frozenset({"apply_error", "invalid", "rejected"})
 
 _CONNECT_RETRIES = 5
 _RETRY_BACKOFF_S = 0.3
+
+
+def _vlan_id(value: Any) -> int | None:
+    """A VLAN number from NVUE, which may send it as an int or a digit string; None otherwise."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
 
 
 class NvidiaCumulusSwitch(NetworkSwitch):
@@ -124,6 +140,19 @@ class NvidiaCumulusSwitch(NetworkSwitch):
         """Single interface (OpenAPI operationId: getInterface)."""
         interface = self._run_api_call(interface_path(port_id))
         return self._parse_port(port_id, interface)
+
+    def port_bridge(self, port_id: str) -> PortBridge:
+        """An interface's bridge domain membership (NVUE: interface <id> bridge domain <d>)."""
+        # rev=applied: the operational view omits the untagged (PVID) VLAN.
+        try:
+            body = self._run_api_call(interface_bridge_domain_path(port_id), params={"rev": "applied"})
+        except SwitchAPIError as error:
+            if error.status_code != 404:
+                raise
+            # NVUE answers 404 for an interface outside the bridge; raise only if the interface itself is missing.
+            self._run_api_call(interface_path(port_id))
+            return PortBridge(interface=port_id)
+        return self._parse_port_bridge(port_id, body)
 
     def vlan(self, vlan_id: str) -> Vlan:
         """Single VLAN with member ports (OpenAPI operationId: getBridgeDomainVlan)."""
@@ -280,7 +309,7 @@ class NvidiaCumulusSwitch(NetworkSwitch):
 
         if response.status_code != 200:
             self._logger.error(f"API call failed: {response.status_code} {response.text}")
-            raise SwitchAPIError(f"API call failed: {response.status_code} {response.text}")
+            raise SwitchAPIError(f"API call failed: {response.status_code} {response.text}", response.status_code)
 
         result = response.json()
         if not isinstance(result, dict):
@@ -351,6 +380,21 @@ class NvidiaCumulusSwitch(NetworkSwitch):
     def _parse_ports(self, interfaces: dict[str, Any]) -> list[Port]:
         ports = [self._parse_port(interface_id, body) for interface_id, body in interfaces.items()]
         return sorted(ports, key=lambda port: port_id_sort_key(port.id))
+
+    @staticmethod
+    def _parse_port_bridge(port_id: str, body: dict[str, Any]) -> PortBridge:
+        if not body:  # not a member of the bridge domain
+            return PortBridge(interface=port_id)
+        # NVUE reports unset VLANs as the placeholder "none", so only a VLAN number counts as set.
+        access = _vlan_id(body.get("access"))
+        learning = body.get("learning")
+        return PortBridge(
+            interface=port_id,
+            # NVUE has no trunk setting: a bridge member is a trunk unless given an access VLAN.
+            mode="trunk" if access is None else "access",
+            native_vlan=_vlan_id(body.get("untagged")) if access is None else access,
+            learning=_LEARNING_VALUES.get(learning) if isinstance(learning, str) else None,
+        )
 
     def _parse_mac_table(self, entries: dict[str, Any]) -> list[MacEntry]:
         table: list[MacEntry] = []

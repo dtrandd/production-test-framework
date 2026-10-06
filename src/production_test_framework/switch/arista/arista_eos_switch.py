@@ -9,6 +9,7 @@ Only the commands backing the ``NetworkSwitch`` interface are wrapped:
     ports / port          -> show interfaces status
     vlans / vlan          -> show vlan  (+ show interfaces status for members)
     lldp_neighbors        -> show lldp neighbors detail
+    port_bridge           -> show interfaces <id> switchport
     set_port_admin_state  -> interface <id> ; [no] shutdown
     delete_vlan           -> no vlan <id>
 
@@ -31,6 +32,7 @@ from production_test_framework.switch.models import (
     NetworkSwitchConfig,
     NetworkSwitchStatus,
     Port,
+    PortBridge,
     Vlan,
 )
 from production_test_framework.switch.network_switch import NetworkSwitch
@@ -114,6 +116,14 @@ class AristaEosSwitch(NetworkSwitch):
         if not isinstance(body, dict):
             raise SwitchAPIError(f"port {port_id} not found")
         return self._parse_port(port_id, body)
+
+    def port_bridge(self, port_id: str) -> PortBridge:
+        """A port's switchport configuration (eAPI: show interfaces <id> switchport)."""
+        switchports = self._run_show(f"show interfaces {port_id} switchport").get("switchports", {})
+        body = switchports.get(port_id)
+        if not isinstance(body, dict):
+            raise SwitchAPIError(f"port {port_id} not found")
+        return self._parse_port_bridge(port_id, body)
 
     def vlan(self, vlan_id: str) -> Vlan:
         try:
@@ -235,6 +245,21 @@ class AristaEosSwitch(NetworkSwitch):
                     continue
                 neighbors.append(LldpNeighbor(interface=interface_id, switch_port=switch_port, chassis_mac=mac))
         return sorted(neighbors, key=lambda neighbor: neighbor.switch_port)
+
+    @staticmethod
+    def _parse_port_bridge(port_id: str, body: dict[str, Any]) -> PortBridge:
+        info = body.get("switchportInfo")
+        if not body.get("enabled") or not isinstance(info, dict):  # a routed port does not bridge
+            return PortBridge(interface=port_id)
+        mode = info.get("mode")
+        native_vlan = info.get("accessVlanId" if mode == "access" else "trunkingNativeVlanId")
+        learning = info.get("macLearning")
+        return PortBridge(
+            interface=port_id,
+            mode=mode if isinstance(mode, str) else None,
+            native_vlan=native_vlan if isinstance(native_vlan, int) else None,
+            learning=learning if isinstance(learning, bool) else None,
+        )
 
     def _parse_mac_table(self, entries: list[dict[str, Any]]) -> list[MacEntry]:
         table: list[MacEntry] = []

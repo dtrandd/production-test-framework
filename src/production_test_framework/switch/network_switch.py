@@ -9,6 +9,7 @@ from production_test_framework.switch.models import (
     NetworkSwitchConfig,
     NetworkSwitchStatus,
     Port,
+    PortBridge,
     Vlan,
 )
 
@@ -58,6 +59,11 @@ class NetworkSwitch(ABC):
     @abstractmethod
     def port(self, port_id: str) -> Port:
         """Get configuration for a port of the switch."""
+        ...
+
+    @abstractmethod
+    def port_bridge(self, port_id: str) -> PortBridge:
+        """Get the bridging configuration of a port: mode, native VLAN and MAC learning."""
         ...
 
     @abstractmethod
