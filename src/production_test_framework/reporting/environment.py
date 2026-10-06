@@ -10,13 +10,12 @@ GPUs of a host reached over SSH and the workload profile a run targeted.
 import os
 import platform
 import re
-import subprocess
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from ..helper import is_localhost
+from ..helper import is_localhost, run_command
 
 __all__ = [
     "benchmark_option_rows",
@@ -48,24 +47,23 @@ def display_path(path: Path) -> str:
     return f".../{resolved.parent.name}/{resolved.name}"
 
 
-def command_output(argv: list[str], timeout: float = 5.0, cwd: Path | None = None) -> tuple[str | None, str]:
+def command_output(argv: list[str], timeout: float = 5.0) -> tuple[str | None, str]:
     """
     ``(stdout, reason)`` for *argv* -- stdout is None on any failure, and *reason* says why.
+
+    Never raises: the rows describe the environment, and a probe that cannot run must not be
+    what fails the run. ``run_command`` already covers a timeout and a missing binary; any other
+    ``OSError`` (a permission error, say) is caught here.
     """
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False, cwd=cwd)
-    except FileNotFoundError:
-        return None, f"{argv[0]} not found on PATH"
-    except subprocess.TimeoutExpired:
-        return None, f"timed out after {timeout:g}s"
+        result = run_command(argv, timeout=timeout)
     except OSError as exc:
         return None, str(exc)
 
-    if proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout).strip().splitlines()
-        return None, detail[0] if detail else f"exit status {proc.returncode}"
-    output = proc.stdout.strip()
-    return (output, "") if output else (None, "command produced no output")
+    if not result.success:
+        detail = (result.stderr or result.stdout).splitlines()
+        return None, detail[0] if detail else f"exit status {result.returncode}"
+    return (result.stdout, "") if result.stdout else (None, "command produced no output")
 
 
 # =============================================================================

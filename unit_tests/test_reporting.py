@@ -9,6 +9,7 @@ from production_test_framework.reporting.assets import Logo, load_logo
 from production_test_framework.reporting.charts import MIN_BARS, latency_percentile_figure
 from production_test_framework.reporting.environment import (
     benchmark_option_rows,
+    command_output,
     git_rows,
     pool_summary,
     profile_host,
@@ -303,6 +304,39 @@ class TestBenchmarkOptionRows:
             {"num_prompts": 10, "result_dir": ".", "result_filename": "inferencex-result.json"}
         )
         assert [row[0] for row in rows] == ["num_prompts"]
+
+
+class TestCommandOutput:
+    """A probe that cannot run says why, and never raises."""
+
+    def test_stdout_on_success(self):
+        assert command_output(["sh", "-c", "echo hello"]) == ("hello", "")
+
+    def test_a_failure_reports_the_first_line_of_stderr(self):
+        assert command_output(["sh", "-c", "echo one >&2; echo two >&2; exit 3"]) == (None, "one")
+
+    def test_a_silent_failure_reports_its_exit_status(self):
+        assert command_output(["sh", "-c", "exit 3"]) == (None, "exit status 3")
+
+    def test_no_output_is_not_a_result(self):
+        assert command_output(["true"]) == (None, "command produced no output")
+
+    def test_a_missing_binary(self):
+        output, reason = command_output(["no-such-binary-xyz"])
+        assert output is None
+        assert "not found" in reason
+
+    def test_a_timeout(self):
+        output, reason = command_output(["sleep", "5"], timeout=0.2)
+        assert output is None
+        assert "timed out" in reason
+
+    def test_a_file_that_cannot_be_executed(self, tmp_path):
+        script = tmp_path / "not-executable"
+        script.write_text("#!/bin/sh\necho hi\n")
+        output, reason = command_output([str(script)])
+        assert output is None
+        assert reason
 
 
 class TestRunnerRows:
