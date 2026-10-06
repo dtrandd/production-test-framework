@@ -49,11 +49,29 @@ def test_port_bridge_unknown_port_raises() -> None:
         switch.port_bridge("Ethernet99")
 
 
-def test_parse_port_bridge_learning_disabled() -> None:
-    body = {"enabled": True, "switchportInfo": {"mode": "access", "trunkingNativeVlanId": 1, "macLearning": False}}
+def test_parse_port_bridge_access_port_uses_access_vlan() -> None:
+    body = {
+        "enabled": True,
+        "switchportInfo": {"mode": "access", "accessVlanId": 10, "trunkingNativeVlanId": 1, "macLearning": False},
+    }
 
     assert AristaEosSwitch._parse_port_bridge("Ethernet1", body) == PortBridge(
-        interface="Ethernet1", mode="access", native_vlan=1, learning=False
+        interface="Ethernet1", mode="access", native_vlan=10, learning=False
+    )
+
+
+@pytest.mark.parametrize("info", [None, "bogus", ["mode", "trunk"]])
+def test_parse_port_bridge_switchport_info_missing_or_malformed(info: object) -> None:
+    body = {"enabled": True} if info is None else {"enabled": True, "switchportInfo": info}
+
+    assert AristaEosSwitch._parse_port_bridge("Ethernet1", body) == PortBridge(interface="Ethernet1")
+
+
+def test_parse_port_bridge_non_string_mode() -> None:
+    body = {"enabled": True, "switchportInfo": {"mode": 1, "trunkingNativeVlanId": 3001, "macLearning": True}}
+
+    assert AristaEosSwitch._parse_port_bridge("Ethernet1", body) == PortBridge(
+        interface="Ethernet1", mode=None, native_vlan=3001, learning=True
     )
 
 

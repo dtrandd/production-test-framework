@@ -252,7 +252,7 @@ class AristaEosSwitch(NetworkSwitch):
         if not body.get("enabled") or not isinstance(info, dict):  # a routed port does not bridge
             return PortBridge(interface=port_id)
         mode = info.get("mode")
-        native_vlan = info.get("trunkingNativeVlanId")
+        native_vlan = info.get("accessVlanId" if mode == "access" else "trunkingNativeVlanId")
         learning = info.get("macLearning")
         return PortBridge(
             interface=port_id,

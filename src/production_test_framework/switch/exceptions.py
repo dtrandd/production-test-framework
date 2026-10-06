@@ -3,4 +3,8 @@
 
 
 class SwitchAPIError(Exception):
-    """Raised when an API call to a switch fails."""
+    """Raised when an API call to a switch fails. status_code is the HTTP status, when there was one."""
+
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code

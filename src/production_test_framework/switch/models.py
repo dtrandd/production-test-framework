@@ -53,7 +53,7 @@ class PortBridge:
     for example on a port that is not bridged."""
 
     interface: str
-    mode: str | None = None  # "trunk" or "access"
+    mode: str | None = None  # "trunk" or "access"; Arista may also report e.g. "dot1qTunnel" or "tap"
     native_vlan: int | None = None  # PVID: the VLAN untagged ingress frames are placed in
     learning: bool | None = None  # True = the port learns source MACs into the FDB
 

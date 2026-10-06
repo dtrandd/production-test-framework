@@ -33,7 +33,7 @@ def interface_bridge_domain_path(interface_id: str) -> str:
 
 def interface_bridge_vlan_path(interface_id: str, vlan_id: str) -> str:
     """Path to a single VLAN's membership on an interface's bridge domain."""
-    return f"{interface_path(interface_id)}/bridge/domain/{BRIDGE_DOMAIN}/vlan/{vlan_id}"
+    return f"{interface_bridge_domain_path(interface_id)}/vlan/{vlan_id}"
 
 
 def revision_path(revision_id: str) -> str:

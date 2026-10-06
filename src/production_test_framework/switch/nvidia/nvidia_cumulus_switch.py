@@ -68,6 +68,17 @@ _CONNECT_RETRIES = 5
 _RETRY_BACKOFF_S = 0.3
 
 
+def _vlan_id(value: Any) -> int | None:
+    """A VLAN number from NVUE, which may send it as an int or a digit string; None otherwise."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
 class NvidiaCumulusSwitch(NetworkSwitch):
     """NVUE client for Cumulus Linux (e.g. Spectrum-5610)."""
 
@@ -133,7 +144,14 @@ class NvidiaCumulusSwitch(NetworkSwitch):
     def port_bridge(self, port_id: str) -> PortBridge:
         """An interface's bridge domain membership (NVUE: interface <id> bridge domain <d>)."""
         # rev=applied: the operational view omits the untagged (PVID) VLAN.
-        body = self._run_api_call(interface_bridge_domain_path(port_id), params={"rev": "applied"})
+        try:
+            body = self._run_api_call(interface_bridge_domain_path(port_id), params={"rev": "applied"})
+        except SwitchAPIError as error:
+            if error.status_code != 404:
+                raise
+            # NVUE answers 404 for an interface outside the bridge; raise only if the interface itself is missing.
+            self._run_api_call(interface_path(port_id))
+            return PortBridge(interface=port_id)
         return self._parse_port_bridge(port_id, body)
 
     def vlan(self, vlan_id: str) -> Vlan:
@@ -291,7 +309,7 @@ class NvidiaCumulusSwitch(NetworkSwitch):
 
         if response.status_code != 200:
             self._logger.error(f"API call failed: {response.status_code} {response.text}")
-            raise SwitchAPIError(f"API call failed: {response.status_code} {response.text}")
+            raise SwitchAPIError(f"API call failed: {response.status_code} {response.text}", response.status_code)
 
         result = response.json()
         if not isinstance(result, dict):
@@ -367,15 +385,14 @@ class NvidiaCumulusSwitch(NetworkSwitch):
     def _parse_port_bridge(port_id: str, body: dict[str, Any]) -> PortBridge:
         if not body:  # not a member of the bridge domain
             return PortBridge(interface=port_id)
-        untagged = body.get("untagged")
-        if isinstance(untagged, str) and untagged.isdigit():
-            untagged = int(untagged)
+        # NVUE reports unset VLANs as the placeholder "none", so only a VLAN number counts as set.
+        access = _vlan_id(body.get("access"))
         learning = body.get("learning")
         return PortBridge(
             interface=port_id,
             # NVUE has no trunk setting: a bridge member is a trunk unless given an access VLAN.
-            mode="access" if "access" in body else "trunk",
-            native_vlan=untagged if isinstance(untagged, int) else None,
+            mode="trunk" if access is None else "access",
+            native_vlan=_vlan_id(body.get("untagged")) if access is None else access,
             learning=_LEARNING_VALUES.get(learning) if isinstance(learning, str) else None,
         )
 
