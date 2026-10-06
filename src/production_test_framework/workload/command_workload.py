@@ -100,8 +100,26 @@ class CommandWorkload(Workload):
         if not result.success:
             if self._cancel_event.is_set():
                 raise WorkloadCancelled()
-            raise RuntimeError(result.stderr or result.stdout or f"{self.workload_name.lower()} command failed")
+            raise RuntimeError(self._failure_detail(result))
         return self.parse_output(result)
+
+    def _failure_detail(self, result) -> str:
+        """
+        Why a command failed: its exit status and both of its streams, each labelled.
+
+        Not ``stderr or stdout``. A containerised workload whose image is not cached locally
+        has a stderr full of docker's layer-download progress -- which is not an error at all,
+        the pull succeeded -- and a stdout holding the real reason it failed. Reporting the
+        first non-empty stream shows the pull noise and discards the answer.
+
+        stdout comes last because it is usually where a tool prints its own diagnosis, and
+        what reads this is a report that keeps the tail of a long capture.
+        """
+        sections = [f"{self.workload_name.lower()} command failed (exit status {result.returncode})"]
+        for name, stream in (("stderr", result.stderr), ("stdout", result.stdout)):
+            if stream and stream.strip():
+                sections.append(f"--- {name} ---\n{stream.strip()}")
+        return "\n".join(sections)
 
     def _safe_cleanup(self) -> None:
         """Run :meth:`_cleanup_after_run`, logging rather than propagating any failure.
