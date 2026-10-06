@@ -105,15 +105,9 @@ class CommandWorkload(Workload):
 
     def _failure_detail(self, result) -> str:
         """
-        Why a command failed: its exit status and both of its streams, each labelled.
+        Describe a failed run: its exit status, then stderr and stdout, each labelled.
 
-        Not ``stderr or stdout``. A containerised workload whose image is not cached locally
-        has a stderr full of docker's layer-download progress -- which is not an error at all,
-        the pull succeeded -- and a stdout holding the real reason it failed. Reporting the
-        first non-empty stream shows the pull noise and discards the answer.
-
-        stdout comes last because it is usually where a tool prints its own diagnosis, and
-        what reads this is a report that keeps the tail of a long capture.
+        Both streams are included since either may hold the cause, and empty ones are left out.
         """
         sections = [f"{self.workload_name.lower()} command failed (exit status {result.returncode})"]
         for name, stream in (("stderr", result.stderr), ("stdout", result.stdout)):
