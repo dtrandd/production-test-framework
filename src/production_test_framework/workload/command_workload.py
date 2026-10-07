@@ -100,8 +100,20 @@ class CommandWorkload(Workload):
         if not result.success:
             if self._cancel_event.is_set():
                 raise WorkloadCancelled()
-            raise RuntimeError(result.stderr or result.stdout or f"{self.workload_name.lower()} command failed")
+            raise RuntimeError(self._failure_detail(result))
         return self.parse_output(result)
+
+    def _failure_detail(self, result) -> str:
+        """
+        Describe a failed run: its exit status, then stderr and stdout, each labelled.
+
+        Both streams are included since either may hold the cause, and empty ones are left out.
+        """
+        sections = [f"{self.workload_name.lower()} command failed (exit status {result.returncode})"]
+        for name, stream in (("stderr", result.stderr), ("stdout", result.stdout)):
+            if stream and stream.strip():
+                sections.append(f"--- {name} ---\n{stream.strip()}")
+        return "\n".join(sections)
 
     def _safe_cleanup(self) -> None:
         """Run :meth:`_cleanup_after_run`, logging rather than propagating any failure.
