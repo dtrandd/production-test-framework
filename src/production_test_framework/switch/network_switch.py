@@ -4,6 +4,7 @@
 from abc import ABC, abstractmethod
 
 from production_test_framework.switch.models import (
+    FlowControl,
     LldpNeighbor,
     MacEntry,
     NetworkSwitchConfig,
@@ -55,6 +56,15 @@ class NetworkSwitch(ABC):
         for entry in self.mac_table:
             table.setdefault(entry.port, set()).add(entry.mac)
         return table
+
+    @property
+    @abstractmethod
+    def flow_control(self) -> FlowControl:
+        """Get the switch-wide link-level flow control configuration.
+
+        Raises NotImplementedError on a switch the driver cannot read it from.
+        """
+        ...
 
     @abstractmethod
     def port(self, port_id: str) -> Port:

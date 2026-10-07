@@ -17,6 +17,12 @@ BRIDGE_DOMAIN_PATH = f"/bridge/domain/{BRIDGE_DOMAIN}"
 BRIDGE_DOMAIN_VLANS_PATH = f"{BRIDGE_DOMAIN_PATH}/vlan"
 BRIDGE_DOMAIN_MAC_TABLE_PATH = f"{BRIDGE_DOMAIN_PATH}/mac-table"
 
+# The PFC profile the switch applies to all ports, and the only one XPT configures.
+PFC_PROFILE = "default-global"
+
+QOS_ROCE_PATH = "/qos/roce"
+QOS_PFC_PROFILE_PATH = f"/qos/pfc/{PFC_PROFILE}"
+
 
 def interface_path(interface_id: str) -> str:
     return f"{INTERFACES_PATH}/{interface_id}"
