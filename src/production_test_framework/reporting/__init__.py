@@ -5,7 +5,7 @@ One result report per run, in HTML or Markdown.
 
 A suite turns the report on from its root ``conftest.py``::
 
-    pytest_plugins = ["production_test_framework.reporting.pytest_plugin"]
+    pytest_plugins = ["production_test_framework.reporting.report_plugin"]
 
 and a run writes one with ``--report-file build/report.html``. Tests take the ``reporter``
 fixture and add tables to it; everything else -- the header, the environment, the per-category
@@ -14,7 +14,9 @@ results and the failure summary -- is assembled from what pytest already knows.
 The submodules are layered so a caller only imports what it needs:
 
 * :mod:`~.formatting` -- numbers, tables and the status vocabulary. Knows nothing of pytest.
-* :mod:`~.report` -- the :class:`Reporter` and the pytest hooks that feed it.
+* :mod:`~.report` -- the :class:`Reporter`, which assembles and writes the report.
+* :mod:`~.report_plugin` -- the pytest plugin: the report's options, the ``reporter``
+  fixture, and the hooks that feed pytest's results into the :class:`Reporter`.
 * :mod:`~.environment` -- rows describing the runner, the checkout, the GPUs and the profile.
 * :mod:`~.workload` -- the configuration and result tables for a finished workload.
 * :mod:`~.assets` -- the header logo, embedded into the report file itself.
@@ -47,7 +49,8 @@ from .formatting import (
     render_table_html,
     render_table_markdown,
 )
-from .report import DEFAULT_TITLE, Reporter, ReportPlugin
+from .report import DEFAULT_TITLE, Reporter
+from .report_plugin import ReportPlugin
 from .workload import report_workload_result, traffic_shape, workload_label
 
 __all__ = [

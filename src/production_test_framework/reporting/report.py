@@ -11,7 +11,7 @@ The report has five parts, in this order:
 4. every failure in one table, with a stack-trace snippet for the first few;
 5. the detail tables individual tests emitted while running.
 
-Parts 1, 3 and 4 come from pytest itself via :class:`ReportPlugin`. Parts 2 and 5 come from
+Parts 1, 3 and 4 come from pytest itself via :class:`~.report_plugin.ReportPlugin`. Parts 2 and 5 come from
 whatever the suite chooses to record, so a suite that records nothing still gets a report.
 """
 
@@ -35,7 +35,6 @@ __all__ = [
     "DEFAULT_MAX_FAILURE_SNIPPETS",
     "DEFAULT_TITLE",
     "FAILED_OUTCOMES",
-    "ReportPlugin",
     "Reporter",
     "UNCATEGORIZED",
 ]
@@ -583,53 +582,3 @@ class Reporter:
         if detail:
             out += ["## Details", "", *detail]
         return "\n".join(out).rstrip() + "\n"
-
-
-class ReportPlugin:
-    """
-    Feeds pytest's own results into a :class:`Reporter`'s summary half.
-    """
-
-    def __init__(self, reporter: Reporter, category_markers: list[str] | None = None):
-        self.reporter = reporter
-        self.category_markers = list(category_markers or [])
-        self._categories: dict[str, str] = {}
-
-    def pytest_collection_modifyitems(self, items):
-        """
-        Resolve every collected test's category.
-        """
-        for item in items:
-            names = {mark.name for mark in item.iter_markers()}
-            self._categories[item.nodeid] = next(
-                (marker for marker in self.category_markers if marker in names), UNCATEGORIZED
-            )
-
-    def pytest_runtest_logreport(self, report):
-        """
-        Record one finished phase per test.
-        """
-        if report.when == "call":
-            outcome = report.outcome
-        elif report.failed:
-            outcome = "error"
-        elif report.when == "setup" and report.skipped:
-            outcome = "skipped"
-        else:
-            return
-
-        self.reporter.record_outcome(
-            nodeid=report.nodeid,
-            outcome=outcome,
-            duration=report.duration,
-            failure_text=report.longreprtext if report.failed else "",
-            category=self._categories.get(report.nodeid, UNCATEGORIZED),
-        )
-
-    def pytest_sessionfinish(self, session):
-        """Write the file one last time and say where it went."""
-        if not self.reporter.writes_file:
-            return
-        self.reporter.flush()
-        writer = session.config.get_terminal_writer()
-        writer.line(f"\n{self.reporter.format.upper()} report: {self.reporter.path}")

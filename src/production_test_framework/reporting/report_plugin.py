@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: FSL-1.1-ALv2
 # Copyright (c) 2025 Delos Data, Inc.
 """
-The pytest side of the report: options, and the reporter every suite shares.
+The pytest side of the report: its options, the ``reporter`` fixture, and the hooks that feed
+pytest's own results into the :class:`~.report.Reporter`.
 
 Enable it from a suite's root ``conftest.py``::
 
-    pytest_plugins = ["production_test_framework.reporting.pytest_plugin"]
+    pytest_plugins = ["production_test_framework.reporting.report_plugin"]
 
 then point a run at a file with ``--report-file``.
 """
@@ -16,9 +17,9 @@ import pytest
 
 from .assets import Logo, load_logo
 from .formatting import ReportFormat
-from .report import DEFAULT_MAX_FAILURE_SNIPPETS, DEFAULT_TITLE, Reporter, ReportPlugin
+from .report import DEFAULT_MAX_FAILURE_SNIPPETS, DEFAULT_TITLE, UNCATEGORIZED, Reporter
 
-__all__ = ["category_markers", "reporter"]
+__all__ = ["ReportPlugin", "category_markers", "reporter"]
 
 
 #: None built in: which markers name a report section is the suite's to say, with the
@@ -131,3 +132,53 @@ def reporter(request):
     instance = request.config.mosaic_reporter
     instance.start_test(request.node.nodeid)
     return instance
+
+
+class ReportPlugin:
+    """
+    Feeds pytest's own results into a :class:`Reporter`'s summary half.
+    """
+
+    def __init__(self, reporter: Reporter, category_markers: list[str] | None = None):
+        self.reporter = reporter
+        self.category_markers = list(category_markers or [])
+        self._categories: dict[str, str] = {}
+
+    def pytest_collection_modifyitems(self, items):
+        """
+        Resolve every collected test's category.
+        """
+        for item in items:
+            names = {mark.name for mark in item.iter_markers()}
+            self._categories[item.nodeid] = next(
+                (marker for marker in self.category_markers if marker in names), UNCATEGORIZED
+            )
+
+    def pytest_runtest_logreport(self, report):
+        """
+        Record one finished phase per test.
+        """
+        if report.when == "call":
+            outcome = report.outcome
+        elif report.failed:
+            outcome = "error"
+        elif report.when == "setup" and report.skipped:
+            outcome = "skipped"
+        else:
+            return
+
+        self.reporter.record_outcome(
+            nodeid=report.nodeid,
+            outcome=outcome,
+            duration=report.duration,
+            failure_text=report.longreprtext if report.failed else "",
+            category=self._categories.get(report.nodeid, UNCATEGORIZED),
+        )
+
+    def pytest_sessionfinish(self, session):
+        """Write the file one last time and say where it went."""
+        if not self.reporter.writes_file:
+            return
+        self.reporter.flush()
+        writer = session.config.get_terminal_writer()
+        writer.line(f"\n{self.reporter.format.upper()} report: {self.reporter.path}")
