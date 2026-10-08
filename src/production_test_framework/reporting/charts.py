@@ -8,7 +8,7 @@ import html
 
 from .formatting import format_number
 
-__all__ = ["latency_percentile_figure"]
+__all__ = ["latency_percentile_figure", "scatter_figure"]
 
 LATENCY_FAMILIES = (
     ("ttft", "TTFT", "time to first token"),
@@ -108,3 +108,66 @@ def latency_percentile_figure(latency: dict[str, float]) -> str:
     if not panels:
         return ""
     return f"<div class='charts'>{''.join(panels)}</div>"
+
+
+_SCATTER_W = 360
+_SCATTER_H = 200
+_SCATTER_PAD = (46, 12, 14, 30)  # left, right, top, bottom
+
+
+def _scatter_panel(title: str, x_label: str, y_label: str, points: list[tuple[float, float, str, bool]]) -> str:
+    left, right, top, bottom = _SCATTER_PAD
+    width, height = _SCATTER_W - left - right, _SCATTER_H - top - bottom
+    xs = [x for x, _, _, _ in points]
+    ys = [y for _, y, _, _ in points]
+    x_lo, x_hi = min(xs), max(xs)
+    y_lo, y_hi = min(0.0, min(ys)), max(ys)
+    x_span = (x_hi - x_lo) or abs(x_hi) or 1.0
+    y_span = (y_hi - y_lo) or abs(y_hi) or 1.0
+    x_lo, x_hi = x_lo - x_span * 0.1, x_hi + x_span * 0.1
+    y_hi += y_span * 0.1
+
+    def place(x: float, y: float) -> tuple[float, float]:
+        return left + (x - x_lo) / (x_hi - x_lo) * width, top + height - (y - y_lo) / (y_hi - y_lo) * height
+
+    marks = []
+    for x, y, label, current in sorted(points, key=lambda point: point[3]):
+        px, py = place(x, y)
+        reading = f"{label}: {format_number(x)} {x_label}, {format_number(y)} {y_label}"
+        marks.append(
+            f"<g><title>{html.escape(reading)}</title>"
+            f"<circle class='{'cb4' if current else 'cb1'}' cx='{px:.1f}' cy='{py:.1f}' r='{5 if current else 3.5}'/>"
+            "</g>"
+        )
+    tick = {
+        name: html.escape(format_number(value, significant=2))
+        for name, value in (("x_lo", x_lo), ("x_hi", x_hi), ("y_lo", y_lo), ("y_hi", y_hi))
+    }
+    base, middle = top + height, left + width / 2
+    axes = (
+        f"<line class='ca' x1='{left}' y1='{base}' x2='{left + width}' y2='{base}'/>"
+        f"<line class='ca' x1='{left}' y1='{top}' x2='{left}' y2='{base}'/>"
+        f"<text class='cl' x='{left - 4}' y='{top}'>{tick['y_hi']}</text>"
+        f"<text class='cl' x='{left - 4}' y='{base}'>{tick['y_lo']}</text>"
+        f"<text class='cv' x='{left}' y='{base + 12}'>{tick['x_lo']}</text>"
+        f"<text class='cl' x='{left + width}' y='{base + 12}'>{tick['x_hi']}</text>"
+        f"<text class='cv' x='{middle}' y='{base + 24}' text-anchor='middle'>{html.escape(x_label)}</text>"
+    )
+    return (
+        "<figure class='chart'>"
+        f"<svg viewBox='0 0 {_SCATTER_W} {_SCATTER_H}' role='img' aria-label='{html.escape(title)}'>"
+        f"{axes}{''.join(marks)}</svg>"
+        f"<figcaption><b>{html.escape(title)}</b> ({html.escape(y_label)})</figcaption>"
+        "</figure>"
+    )
+
+
+def scatter_figure(panels: list[tuple[str, str, str, list[tuple[float, float, str, bool]]]]) -> str:
+    """
+    Small-multiple scatter plots, one per ``(title, x_label, y_label, points)`` panel.
+
+    Each point is ``(x, y, label, current)``; the current run is drawn larger and darker. Panels
+    with no point are left out, and "" is returned when none remain.
+    """
+    drawn = [_scatter_panel(*panel) for panel in panels if panel[3]]
+    return f"<div class='charts'>{''.join(drawn)}</div>" if drawn else ""

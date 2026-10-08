@@ -6,23 +6,28 @@ Report an AgentX run: the options it ran with, every metric it produced, and its
 
 import base64
 import html
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from ..gpu_economics import ECONOMICS_METRICS, X_AXIS_METRICS, EconomicsInputs, economics_metrics
+from ..power import PowerSummary
 from ..workload.agentx_workload import AgentxResult, AgentxWorkload
 from ..workload.workload import WorkloadResult
-from .charts import latency_percentile_figure
+from .charts import latency_percentile_figure, scatter_figure
 from .environment import benchmark_option_rows, display_path
 from .formatting import format_duration, format_number
 
 __all__ = [
+    "agentx_economics",
+    "agentx_economics_input_rows",
     "agentx_latency_figure",
     "agentx_stat_rows",
     "agentx_summary_rows",
     "aiperf_metric_rows",
     "flattened_rows",
     "png_figure",
+    "power_summary_rows",
     "report_agentx_configuration",
     "report_agentx_result",
 ]
@@ -243,19 +248,124 @@ def _report_agentx_tables(reporter, result: AgentxResult, runtime: float) -> Non
             reporter.output(problem, title="AgentX problem")
 
 
+#: InferenceX's default percentile for the x-axis.
+DEFAULT_PERCENTILE = "p90"
+
+
+def agentx_economics(
+    scored: Mapping[str, Any], inputs: EconomicsInputs, percentile: str = DEFAULT_PERCENTILE
+) -> tuple[dict[str, float | None], dict[str, float | None]]:
+    """``(y, x)``: the economics metrics of a scored AgentX run, and its x-axis values at *percentile*."""
+    per_gpu = _get(scored, "request_metrics", "throughput", "per_gpu") or {}
+    y = economics_metrics(
+        per_gpu.get("total_tput_tps"), per_gpu.get("input_tput_tps"), per_gpu.get("output_tput_tps"), inputs
+    )
+    latency = _get(scored, "request_metrics", "latency") or {}
+    x = {key: _get(latency, family, percentile) for key, _, _, family in X_AXIS_METRICS}
+    return y, x
+
+
+def agentx_economics_input_rows(inputs: EconomicsInputs) -> list[list[str]]:
+    """The economics inputs as (input, value, unit, source) rows."""
+    not_set = "not configured"
+    rows = [
+        ["GPU defaults", inputs.gpu or "no match -- set economics.gpu", "", ""],
+        ["cost basis", inputs.cost_basis, "", ""],
+    ]
+    for field, label, unit in (
+        ("all_in_watts_per_gpu", "all-in provisioned power", "W/GPU"),
+        ("cost_per_gpu_hour", "TCO", "$/GPU/hr"),
+        ("input_price_per_million", "input token price", "$/M tokens"),
+        ("output_price_per_million", "output token price", "$/M tokens"),
+    ):
+        value = getattr(inputs, field)
+        rows.append([label, not_set if value is None else _cell(value), unit, inputs.sources.get(field, "")])
+    return rows
+
+
+def power_summary_rows(power: PowerSummary) -> list[list[str]]:
+    """What a power sampler measured during the run, as (measure, value, unit) rows."""
+    not_measured = "not measured"
+    return [
+        ["samples", _cell(power.samples), ""],
+        ["GPUs sampled", _cell(power.gpu_count), ""],
+        ["GPU power limit", _cell(power.gpu_limit_w), "W/GPU"],
+        ["GPU power mean", _cell(power.gpu_avg_w) if power.gpu_avg_w is not None else not_measured, "W/GPU"],
+        ["GPU power max", _cell(power.gpu_max_w) if power.gpu_max_w is not None else not_measured, "W/GPU"],
+        ["server wall power mean", _cell(power.server_avg_w) if power.server_avg_w is not None else not_measured, "W"],
+        ["server wall power max", _cell(power.server_max_w) if power.server_max_w is not None else not_measured, "W"],
+    ]
+
+
+def _report_agentx_economics_tables(reporter, scored: Mapping[str, Any], inputs: EconomicsInputs) -> None:
+    reporter.table(
+        ["input", "value", "unit", "source"],
+        agentx_economics_input_rows(inputs),
+        title="AgentX economics inputs",
+        left={1, 2, 3},
+    )
+    y, x = agentx_economics(scored, inputs)
+    rows = [[label, _cell(y[key]), unit] for key, label, unit in ECONOMICS_METRICS]
+    rows += [[f"{label} ({DEFAULT_PERCENTILE})", _cell(x[key]), unit] for key, label, unit, _ in X_AXIS_METRICS]
+    reporter.table(["metric", "value", "unit"], rows, title="AgentX economics", left={2})
+
+
+def _report_agentx_economics_figures(
+    reporter,
+    scored: Mapping[str, Any],
+    inputs: EconomicsInputs,
+    history: Sequence[tuple[str, Mapping[str, Any]]],
+) -> None:
+    runs = [(label, *agentx_economics(other, inputs), False) for label, other in history]
+    runs.append(("this run", *agentx_economics(scored, inputs), True))
+    for key, label, unit in ECONOMICS_METRICS:
+        panels = [
+            (
+                f"{label} vs {x_label}",
+                x_unit,
+                unit,
+                [(x[x_key], y[key], run, current) for run, y, x, current in runs if None not in (x[x_key], y[key])],
+            )
+            for x_key, x_label, x_unit, _ in X_AXIS_METRICS
+        ]
+        reporter.figure(scatter_figure(panels), title=f"{label} -- AgentX")
+
+
 def _report_agentx_figures(reporter, result: AgentxResult) -> None:
     reporter.figure(agentx_latency_figure(result.aggregate), title="Latency distribution -- AgentX")
     if plots := [figure for path in result.plots if (figure := png_figure(path))]:
         reporter.figure(f"<div class='charts'>{''.join(plots)}</div>", title="aiperf plots -- AgentX")
 
 
-def report_agentx_result(reporter, workload: AgentxWorkload, result: WorkloadResult) -> None:
-    """Write *result* into *reporter*: the result tables, then the figures."""
+def report_agentx_result(
+    reporter,
+    workload: AgentxWorkload,
+    result: WorkloadResult,
+    economics: EconomicsInputs | None = None,
+    history: Sequence[tuple[str, Mapping[str, Any]]] = (),
+    power: PowerSummary | None = None,
+) -> None:
+    """
+    Write *result* into *reporter*: the result tables, then the figures.
+
+    With *economics*, adds the InferenceX cost and power metrics, charted against each x-axis
+    with one point per *history* run, ``(label, scored aggregate)``, besides this one.
+    """
     match result.result:
         case AgentxResult() as agentx:
             reporter.note(f"AgentX artifacts: {display_path(agentx.run_dir)}")
             _report_agentx_tables(reporter, agentx, result.runtime)
+            if power is not None:
+                reporter.table(
+                    ["measure", "value", "unit"], power_summary_rows(power), title="Measured power", left={2}
+                )
+                for error in power.errors:
+                    reporter.note(f"Power reading unavailable: {error}")
+            if economics is not None and agentx.scored:
+                _report_agentx_economics_tables(reporter, agentx.scored, economics)
             _report_agentx_figures(reporter, agentx)
+            if economics is not None and agentx.scored:
+                _report_agentx_economics_figures(reporter, agentx.scored, economics, history)
         case str() as text:
             reporter.output(text, title=f"Workload output -- AgentX ({result.status.value})")
             reporter.note(f"Full aiperf log: {display_path(workload.log_path)}")
