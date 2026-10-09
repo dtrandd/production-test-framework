@@ -231,6 +231,9 @@ class TestReportAgentx:
         ]
         assert positions == sorted(positions)
         assert "data:image/png;base64," in html
+        assert html.count("Data: <a href='#s0-aiperf-metrics'>aiperf metrics</a>") == 1
+        plots = html.index("aiperf plots -- AgentX")
+        assert "Data:" not in html[plots : plots + 200]
         assert "server_metrics_export.json missing or empty" in html
 
     def test_a_failed_run_reports_its_output(self, report, workload):
@@ -248,7 +251,7 @@ class TestAgentxRows:
         result = AgentxResult(run_dir=tmp_path, artifact_dir=tmp_path, aggregate=AGGREGATE, scored=SCORED)
         rows = {row[0]: row[1] for row in report_agentx.agentx_summary_rows(result)}
         assert rows["error rate"] == "5.00%"
-        assert rows["throughput per GPU (input+output)"] == "20,000"
+        assert rows["throughput per GPU (input+output)"] == "20,000.0"
         assert rows["theoretical prefix cache hit rate"] == "90.00%"
         assert rows["submission valid"] == "false"
 
@@ -272,3 +275,44 @@ class TestAgentxRows:
 
     def test_unreadable_png_yields_no_figure(self, tmp_path):
         assert report_agentx.png_figure(tmp_path / "missing.png") == ""
+
+
+class TestFormatForUnit:
+    @pytest.mark.parametrize(
+        ("value", "unit", "shown"),
+        [
+            (7.19, "tok/s", "7.2"),
+            (330.3039, "tok/s/GPU", "330.3"),
+            (0.125, "$", "0.13"),
+            (7.25, "tok/s", "7.3"),
+            (604952.1978, "tok/s/MW", "604,952.2"),
+            (43.29, "tokens/sec/user", "43.3"),
+            (0.29, "$", "0.29"),
+            (3.7006, "$", "3.70"),
+            (0.0699, "$/GPU/hr", "0.07"),
+            (0.17, "$/M tokens", "0.17"),
+        ],
+    )
+    def test_token_rates_keep_one_place_and_dollars_two(self, value, unit, shown):
+        assert report_agentx.format_for_unit(value, unit) == shown
+
+    def test_other_units_are_unchanged(self):
+        assert report_agentx.format_for_unit(1.6530, "J/tok") == "1.653"
+        assert report_agentx.format_for_unit(6994670.82, "tok/$") == "6,994,670.82"
+
+
+class TestExitSummary:
+    def test_picks_aiperf_error_line_without_its_source(self, tmp_path):
+        log = (
+            "19:43:35.459 NOTICE   Phase profiling complete\n"
+            "19:43:37.559 ERROR    Profiling metric coverage below the required 95.0% (results.py:211)\n"
+            "19:43:37.589 ERROR    Received fatal profile-results validation error\n"
+        )
+        result = AgentxResult(run_dir=tmp_path, artifact_dir=tmp_path, aggregate={}, exit_error=log)
+        assert result.exit_summary == "Profiling metric coverage below the required 95.0%"
+
+    def test_falls_back_to_the_first_line(self, tmp_path):
+        result = AgentxResult(
+            run_dir=tmp_path, artifact_dir=tmp_path, aggregate={}, exit_error="agentx command failed\nmore"
+        )
+        assert result.exit_summary == "agentx command failed"

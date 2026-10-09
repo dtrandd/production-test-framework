@@ -12,6 +12,7 @@ from a venv of their own (:class:`AgentxHarness`).
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from collections.abc import Mapping
@@ -49,6 +50,28 @@ EXTRA_REQUIREMENTS = ("datasets>=4.7.0",)
 
 AGGREGATE_FILE = "profile_export_aiperf.json"
 RESULT_FILENAME = "agentx_result"
+
+# aiperf draws on a 1600x800 canvas, so its text and markers shrink to nothing at report width.
+# Half the canvas at twice the scale keeps the resolution and doubles their relative size. Its
+# legends sit inside the plot over the data, so they move above it, at the top right.
+PLOT_COMMAND = """
+import sys
+import plotly.graph_objects as go
+import aiperf.plot.exporters.png.base as png
+png.DEFAULT_PLOT_WIDTH, png.DEFAULT_PLOT_HEIGHT, png.DEFAULT_PLOT_DPI = 900, 450, 267
+write_image = go.Figure.write_image
+def write_with_legend_above(fig, *args, **kwargs):
+    top = fig.layout.margin.t if fig.layout.margin.t is not None else 80
+    fig.update_layout(
+        legend={"orientation": "h", "x": 1, "xanchor": "right", "y": 1.02, "yanchor": "bottom"},
+        margin={"t": top + 30},
+    )
+    return write_image(fig, *args, **kwargs)
+go.Figure.write_image = write_with_legend_above
+from aiperf.cli import app
+sys.argv = ["aiperf", "plot", *sys.argv[1:]]
+app()
+"""
 
 INSTALL_TIMEOUT = 1800.0
 SCORING_TIMEOUT = 900.0
@@ -251,6 +274,13 @@ class AgentxResult:
         return self.error_requests / completed if completed else None
 
     @property
+    def exit_summary(self) -> str:
+        """The first ERROR line aiperf logged in :attr:`exit_error`, else its first line."""
+        if match := re.search(r"\bERROR\s+(.+?)(?:\s+\(\w+\.py:\d+\))?$", self.exit_error, re.MULTILINE):
+            return match.group(1).strip()
+        return self.exit_error.strip().partition("\n")[0]
+
+    @property
     def submission_valid(self) -> bool | None:
         """False when the scenario's invariants were overridden, e.g. a run shorter than its minimum."""
         return _find_key(self.aggregate, "submission_valid")
@@ -393,7 +423,7 @@ class AgentxWorkload(CommandWorkload):
     def _plot(self, artifacts: Path) -> tuple[list[Path], str]:
         """aiperf's PNG plots; kaleido renders them with Chrome, *browser_path* or ``$BROWSER_PATH``."""
         output = self._run_dir / "plots"
-        argv = [str(self._harness.aiperf), "plot", str(artifacts), "--output", str(output)]
+        argv = [str(self._harness.python), "-c", PLOT_COMMAND, str(artifacts), "--output", str(output)]
         try:
             done = self._venv_run(
                 argv, PLOT_TIMEOUT, **({"BROWSER_PATH": self._browser_path} if self._browser_path else {})

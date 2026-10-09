@@ -7,6 +7,7 @@ Report an AgentX run: the options it ran with, every metric it produced, and its
 import base64
 import html
 from collections.abc import Iterator, Mapping, Sequence
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,7 @@ __all__ = [
     "agentx_summary_rows",
     "aiperf_metric_rows",
     "flattened_rows",
+    "format_for_unit",
     "png_figure",
     "power_summary_rows",
     "report_agentx_configuration",
@@ -33,6 +35,9 @@ __all__ = [
 ]
 
 STAT_COLUMNS = ("mean", "p50", "p75", "p90", "p95", "std")
+
+AIPERF_METRICS_TITLE = "aiperf metrics"
+ECONOMICS_TITLE = "AgentX economics"
 
 AIPERF_STAT_COLUMNS = ("avg", "p50", "p90", "p95", "p99", "min", "max", "std")
 
@@ -66,13 +71,35 @@ def _percent(value: Any) -> str:
     return "-" if value is None else f"{float(value) * 100:.2f}%"
 
 
-def _cell(value: Any) -> str:
+def _unit_decimals(unit: str) -> int | None:
+    """Decimal places this suite shows for *unit*: 1 for a token rate, 2 for a dollar amount."""
+    if unit.startswith("$"):
+        return 2
+    if "tok/s" in unit or "tokens/sec" in unit:
+        return 1
+    return None
+
+
+def format_for_unit(value: float, unit: str = "", significant: int | None = None) -> str:
+    """*value* rounded, halves up, to its unit's decimal places, or as :func:`format_number` shows it."""
+    places = _unit_decimals(unit)
+    if places is None:
+        return format_number(value, significant=significant)
+    rounded = Decimal(repr(float(value))).quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)
+    return f"{rounded:,.{places}f}"
+
+
+def _axis_value(value: float, unit: str) -> str:
+    return format_for_unit(value, unit, significant=2)
+
+
+def _cell(value: Any, unit: str = "") -> str:
     if value is None:
         return "-"
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, int | float):
-        return format_number(value)
+        return format_for_unit(value, unit)
     if isinstance(value, list):
         return ", ".join(_cell(item) for item in value) or "-"
     return str(value)
@@ -96,14 +123,22 @@ def agentx_summary_rows(result: AgentxResult) -> list[list[str]]:
         ["profiling window", format_duration(throughput.get("duration_seconds")), ""],
         ["QPS mean", _cell(_get(requests, "qps", "mean")), "req/s"],
         ["QPS p95", _cell(_get(requests, "qps", "p95")), "req/s"],
-        ["throughput (input+output)", _cell(_get(throughput, "total", "tokens_per_second")), "tok/s"],
-        ["throughput (input)", _cell(_get(throughput, "input", "tokens_per_second")), "tok/s"],
-        ["throughput (output)", _cell(_get(throughput, "output", "tokens_per_second")), "tok/s"],
-        ["throughput per GPU (input+output)", _cell(_get(throughput, "per_gpu", "total_tput_tps")), "tok/s/GPU"],
-        ["throughput per GPU (output)", _cell(_get(throughput, "per_gpu", "output_tput_tps")), "tok/s/GPU"],
+        ["throughput (input+output)", _cell(_get(throughput, "total", "tokens_per_second"), "tok/s"), "tok/s"],
+        ["throughput (input)", _cell(_get(throughput, "input", "tokens_per_second"), "tok/s"), "tok/s"],
+        ["throughput (output)", _cell(_get(throughput, "output", "tokens_per_second"), "tok/s"), "tok/s"],
+        [
+            "throughput per GPU (input+output)",
+            _cell(_get(throughput, "per_gpu", "total_tput_tps"), "tok/s/GPU"),
+            "tok/s/GPU",
+        ],
+        [
+            "throughput per GPU (output)",
+            _cell(_get(throughput, "per_gpu", "output_tput_tps"), "tok/s/GPU"),
+            "tok/s/GPU",
+        ],
         ["TTFT mean", _cell(_get(requests, "latency", "ttft", "mean")), "s"],
         ["TTFT p95", _cell(_get(requests, "latency", "ttft", "p95")), "s"],
-        ["interactivity mean", _cell(_get(requests, "latency", "intvty", "mean")), "tok/s/user"],
+        ["interactivity mean", _cell(_get(requests, "latency", "intvty", "mean"), "tok/s/user"), "tok/s/user"],
         ["E2E latency mean", _cell(_get(requests, "latency", "e2el", "mean")), "s"],
         ["theoretical prefix cache hit rate", _percent(_get(requests, "cache", "theoretical_cache_hit_rate")), ""],
         ["GPU prefix cache hit rate (server)", _percent(_get(server, "cache", "gpu_cache_hit_rate")), ""],
@@ -121,14 +156,18 @@ def agentx_stat_rows(families: Mapping[str, Any], units: Mapping[str, str] | Non
         if not isinstance(stats, Mapping) or not stats:
             continue
         unit = (units or {}).get(name, "")
-        rows.append([name, unit, *(_cell(stats.get(column)) for column in STAT_COLUMNS)])
+        rows.append([name, unit, *(_cell(stats.get(column), unit) for column in STAT_COLUMNS)])
     return rows
 
 
 def aiperf_metric_rows(metrics: Mapping[str, Mapping[str, Any]]) -> list[list[str]]:
     """Every aiperf metric with its unit and :data:`AIPERF_STAT_COLUMNS`."""
     return [
-        [name, str(metric.get("unit", "")), *(_cell(metric.get(column)) for column in AIPERF_STAT_COLUMNS)]
+        [
+            name,
+            str(metric.get("unit", "")),
+            *(_cell(metric.get(column), str(metric.get("unit", ""))) for column in AIPERF_STAT_COLUMNS),
+        ]
         for name, metric in metrics.items()
     ]
 
@@ -222,7 +261,7 @@ def _report_agentx_tables(reporter, result: AgentxResult, runtime: float) -> Non
     reporter.table(
         ["metric", "unit", *AIPERF_STAT_COLUMNS],
         aiperf_metric_rows(result.metrics),
-        title="aiperf metrics",
+        title=AIPERF_METRICS_TITLE,
         left={1},
     )
     if errors := result.aggregate.get("error_summary"):
@@ -247,6 +286,26 @@ def _report_agentx_tables(reporter, result: AgentxResult, runtime: float) -> Non
         if problem:
             reporter.output(problem, title="AgentX problem")
 
+
+#: Short y-axis titles for the economics charts; the full name is in each panel's caption.
+ECONOMICS_AXIS_TITLES = {
+    "tpPerGpu": "Throughput/chip",
+    "inputTputPerGpu": "Input tput/chip",
+    "outputTputPerGpu": "Output tput/chip",
+    "tpPerMw": "Throughput/MW",
+    "inputTputPerMw": "Input tput/MW",
+    "outputTputPerMw": "Output tput/MW",
+    "tokenRevenuePerGpuHour": "Revenue/GPU-hr",
+    "tokensPerDollar": "Tokens per $1",
+    "outputTokensPerDollar": "Output tok per $1",
+    "inputTokensPerDollar": "Input tok per $1",
+    "cost": "Cost/M tokens",
+    "costOutput": "Cost/M output tok",
+    "costInput": "Cost/M input tok",
+    "jTotal": "J/token",
+    "jOutput": "J/output token",
+    "jInput": "J/input token",
+}
 
 #: InferenceX's default percentile for the x-axis.
 DEFAULT_PERCENTILE = "p90"
@@ -279,7 +338,7 @@ def agentx_economics_input_rows(inputs: EconomicsInputs) -> list[list[str]]:
         ("output_price_per_million", "output token price", "$/M tokens"),
     ):
         value = getattr(inputs, field)
-        rows.append([label, not_set if value is None else _cell(value), unit, inputs.sources.get(field, "")])
+        rows.append([label, not_set if value is None else _cell(value, unit), unit, inputs.sources.get(field, "")])
     return rows
 
 
@@ -305,9 +364,9 @@ def _report_agentx_economics_tables(reporter, scored: Mapping[str, Any], inputs:
         left={1, 2, 3},
     )
     y, x = agentx_economics(scored, inputs)
-    rows = [[label, _cell(y[key]), unit] for key, label, unit in ECONOMICS_METRICS]
-    rows += [[f"{label} ({DEFAULT_PERCENTILE})", _cell(x[key]), unit] for key, label, unit, _ in X_AXIS_METRICS]
-    reporter.table(["metric", "value", "unit"], rows, title="AgentX economics", left={2})
+    rows = [[label, _cell(y[key], unit), unit] for key, label, unit in ECONOMICS_METRICS]
+    rows += [[f"{label} ({DEFAULT_PERCENTILE})", _cell(x[key], unit), unit] for key, label, unit, _ in X_AXIS_METRICS]
+    reporter.table(["metric", "value", "unit"], rows, title=ECONOMICS_TITLE, left={2})
 
 
 def _report_agentx_economics_figures(
@@ -315,9 +374,10 @@ def _report_agentx_economics_figures(
     scored: Mapping[str, Any],
     inputs: EconomicsInputs,
     history: Sequence[tuple[str, Mapping[str, Any]]],
+    run_label: str,
 ) -> None:
     runs = [(label, *agentx_economics(other, inputs), False) for label, other in history]
-    runs.append(("this run", *agentx_economics(scored, inputs), True))
+    runs.append((run_label, *agentx_economics(scored, inputs), True))
     for key, label, unit in ECONOMICS_METRICS:
         panels = [
             (
@@ -325,16 +385,27 @@ def _report_agentx_economics_figures(
                 x_unit,
                 unit,
                 [(x[x_key], y[key], run, current) for run, y, x, current in runs if None not in (x[x_key], y[key])],
+                f"{x_label} ({x_unit})",
+                f"{ECONOMICS_AXIS_TITLES[key]} ({unit})",
             )
             for x_key, x_label, x_unit, _ in X_AXIS_METRICS
         ]
-        reporter.figure(scatter_figure(panels), title=f"{label} -- AgentX")
+        reporter.figure(
+            scatter_figure(panels, ("this run", "earlier runs of this profile"), formatter=_axis_value),
+            title=f"{label} -- AgentX",
+            data_tables=(ECONOMICS_TITLE,),
+        )
 
 
 def _report_agentx_figures(reporter, result: AgentxResult) -> None:
-    reporter.figure(agentx_latency_figure(result.aggregate), title="Latency distribution -- AgentX")
+    reporter.figure(
+        agentx_latency_figure(result.aggregate),
+        title="Latency distribution -- AgentX",
+        data_tables=(AIPERF_METRICS_TITLE,),
+    )
     if plots := [figure for path in result.plots if (figure := png_figure(path))]:
-        reporter.figure(f"<div class='charts'>{''.join(plots)}</div>", title="aiperf plots -- AgentX")
+        full_width = "<div class='charts' style='grid-template-columns:1fr'>"
+        reporter.figure(f"{full_width}{''.join(plots)}</div>", title="aiperf plots -- AgentX")
 
 
 def report_agentx_result(
@@ -344,12 +415,14 @@ def report_agentx_result(
     economics: EconomicsInputs | None = None,
     history: Sequence[tuple[str, Mapping[str, Any]]] = (),
     power: PowerSummary | None = None,
+    run_label: str = "this run",
 ) -> None:
     """
     Write *result* into *reporter*: the result tables, then the figures.
 
     With *economics*, adds the InferenceX cost and power metrics, charted against each x-axis
-    with one point per *history* run, ``(label, scored aggregate)``, besides this one.
+    with one point per *history* run, ``(label, scored aggregate)``, besides this one, labelled
+    *run_label*.
     """
     match result.result:
         case AgentxResult() as agentx:
@@ -365,7 +438,7 @@ def report_agentx_result(
                 _report_agentx_economics_tables(reporter, agentx.scored, economics)
             _report_agentx_figures(reporter, agentx)
             if economics is not None and agentx.scored:
-                _report_agentx_economics_figures(reporter, agentx.scored, economics, history)
+                _report_agentx_economics_figures(reporter, agentx.scored, economics, history, run_label)
         case str() as text:
             reporter.output(text, title=f"Workload output -- AgentX ({result.status.value})")
             reporter.note(f"Full aiperf log: {display_path(workload.log_path)}")

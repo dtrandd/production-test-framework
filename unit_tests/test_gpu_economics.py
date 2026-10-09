@@ -163,7 +163,7 @@ class TestAgentxEconomicsReport:
         reporter.start_test("t.py::a")
         inputs = resolve_economics("rtx-pro-2000-blackwell", "Qwen/Qwen3-8B")
         report_agentx._report_agentx_economics_tables(reporter, SCORED, inputs)
-        report_agentx._report_agentx_economics_figures(reporter, SCORED, inputs, [("earlier", SCORED)])
+        report_agentx._report_agentx_economics_figures(reporter, SCORED, inputs, [("earlier", SCORED)], "baseline")
         reporter.flush()
         html = reporter.path.read_text()
 
@@ -171,6 +171,9 @@ class TestAgentxEconomicsReport:
         for _, label, _ in ECONOMICS_METRICS:
             assert f"{label} -- AgentX" in html
         assert "Cost per Million Total Tokens vs TTFT" in html
+        assert "<title>baseline: " in html
+        assert "<title>earlier: " in html
+        assert html.count("Data: <a href='#s0-agentx-economics'>AgentX economics</a>") == len(ECONOMICS_METRICS)
 
 
 class TestScatterFigure:
@@ -179,5 +182,31 @@ class TestScatterFigure:
 
     def test_current_run_is_emphasised(self):
         figure = scatter_figure([("a", "s", "tok", [(1.0, 2.0, "old", False), (2.0, 3.0, "this run", True)])])
-        assert figure.count("<circle") == 2
+        assert figure.count("<circle") == 4
         assert "cb4" in figure
+
+    def test_legend_names_both_kinds_of_point(self):
+        figure = scatter_figure(
+            [("a", "s", "tok", [(1.0, 2.0, "old", False), (2.0, 3.0, "this run", True)])], ("now", "before")
+        )
+        assert "aria-label='legend'" in figure
+        assert ">now<" in figure and ">before<" in figure
+
+    def test_long_y_title_puts_its_unit_on_a_second_line(self):
+        figure = scatter_figure([("a", "s", "tok/s/MW", [(1.0, 2.0, "run", True)], "x", "Throughput/MW (tok/s/MW)")])
+        assert "<tspan x='0' dy='0'>Throughput/MW</tspan><tspan x='0' dy='1.15em'>(tok/s/MW)</tspan>" in figure
+
+    def test_short_y_title_stays_on_one_line(self):
+        figure = scatter_figure([("a", "s", "J/tok", [(1.0, 2.0, "run", True)], "x", "J/token (J/tok)")])
+        assert "<tspan x='0' dy='0'>J/token (J/tok)</tspan></text>" in figure
+
+    def test_point_names_show_only_on_hover(self):
+        figure = scatter_figure([("a", "s", "tok", [(1.0, 2.0, "old", False), (2.0, 3.0, "mine", True)])])
+        assert ">mine</text>" not in figure
+        assert "<title>mine: " in figure
+        assert "<title>old: " in figure
+
+    def test_legend_leaves_out_kinds_not_drawn(self):
+        figure = scatter_figure([("a", "s", "tok", [(2.0, 3.0, "this run", True)])])
+        assert ">this run<" in figure
+        assert "other runs" not in figure
