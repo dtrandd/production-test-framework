@@ -11,6 +11,7 @@ import pytest
 from production_test_framework import env_vars
 from production_test_framework.config import LGTMConfig
 from production_test_framework.env_vars import EnvironmentVariable, Scoped
+from production_test_framework.k8s import KubernetesClient
 
 
 class TestIsSet:
@@ -120,6 +121,15 @@ class TestLGTMConfigEnvironmentVariables:
         assert variables["REMOTE_HOST"] == EnvironmentVariable(
             name="REMOTE_HOST", purpose="target host for SSH and kubectl", fallback="localhost"
         )
+
+
+class TestKubernetesClientEnvironmentVariables:
+    """Tests for KubernetesClient.environment_variables."""
+
+    def test_declares_kubeconfig(self):
+        assert KubernetesClient.environment_variables() == [
+            EnvironmentVariable(name="KUBECONFIG", purpose="kubeconfig for local kubectl", fallback="~/.kube/config")
+        ]
 
 
 class TestUsedBy:

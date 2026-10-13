@@ -11,3 +11,6 @@
   ANSIBLE_REMOTE_USER:
     purpose: SSH user for REMOTE_HOST
     fallback: "not needed: the target is this machine"
+  KUBECONFIG:
+    purpose: kubeconfig for local kubectl
+    fallback: ~/.kube/config
