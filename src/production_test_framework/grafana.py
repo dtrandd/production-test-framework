@@ -526,7 +526,8 @@ def panel_queries(
         query.setdefault("maxDataPoints", max_data_points)
 
         if datasource.get("type") == "loki":
-            query.setdefault("queryType", "range")
+            # Grafana treats a legacy "instant": true target as an instant query.
+            query.setdefault("queryType", "instant" if query.get("instant") is True else "range")
             query.setdefault("maxLines", max_lines)
 
         queries.append(query)

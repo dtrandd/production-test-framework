@@ -10,6 +10,7 @@ Only the commands backing the ``NetworkSwitch`` interface are wrapped:
     vlans / vlan          -> show vlan  (+ show interfaces status for members)
     lldp_neighbors        -> show lldp neighbors detail
     port_bridge           -> show interfaces <id> switchport
+    flow_control          -> not supported yet, raises NotImplementedError
     set_port_admin_state  -> interface <id> ; [no] shutdown
     delete_vlan           -> no vlan <id>
 
@@ -27,6 +28,7 @@ from pyeapi.eapilib import ConnectionError as EapiConnectionError
 
 from production_test_framework.switch.exceptions import SwitchAPIError
 from production_test_framework.switch.models import (
+    FlowControl,
     LldpNeighbor,
     MacEntry,
     NetworkSwitchConfig,
@@ -124,6 +126,10 @@ class AristaEosSwitch(NetworkSwitch):
         if not isinstance(body, dict):
             raise SwitchAPIError(f"port {port_id} not found")
         return self._parse_port_bridge(port_id, body)
+
+    @property
+    def flow_control(self) -> FlowControl:
+        raise NotImplementedError("flow control is not supported on Arista EOS yet")
 
     def vlan(self, vlan_id: str) -> Vlan:
         try:

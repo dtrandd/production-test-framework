@@ -14,6 +14,7 @@ from urllib3.util.retry import Retry
 
 from production_test_framework.switch.exceptions import SwitchAPIError
 from production_test_framework.switch.models import (
+    FlowControl,
     LldpNeighbor,
     MacEntry,
     NetworkSwitchConfig,
@@ -30,6 +31,8 @@ from production_test_framework.switch.nvidia.nvue_paths import (
     FIRMWARE_PATH,
     INTERFACES_PATH,
     PLATFORM_PATH,
+    QOS_PFC_PROFILE_PATH,
+    QOS_ROCE_PATH,
     REVISION_PATH,
     SYSTEM_PATH,
     bridge_domain_vlan_path,
@@ -56,6 +59,13 @@ _SWP_PREFIX = "swp"
 
 # NVUE spells the bridge learning key "on"/"off" before 5.15 and "enabled"/"disabled" from it.
 _LEARNING_VALUES = {"on": True, "enabled": True, "off": False, "disabled": False}
+
+# Same release split for RoCE: "enable": "on" before 5.15, "state": "enabled" from it.
+_ROCE_STATE_KEYS = ("state", "enable")
+_ROCE_ON_VALUES = frozenset({"on", "enabled"})
+
+# The RoCE mode that carries PFC. NVUE defaults to it, so a missing mode counts as lossless.
+_ROCE_MODE_LOSSLESS = "lossless"
 
 # NVUE applies config changes asynchronously once a changeset is applied.
 _APPLY_TIMEOUT_S = 60.0
@@ -154,6 +164,14 @@ class NvidiaCumulusSwitch(NetworkSwitch):
             return PortBridge(interface=port_id)
         return self._parse_port_bridge(port_id, body)
 
+    @property
+    def flow_control(self) -> FlowControl:
+        """Switch-wide flow control (NVUE: qos roce, and qos pfc default-global)."""
+        # rev=applied: a staged but unapplied revision must not show up as the switch's state.
+        roce = self._applied_config_or_none(QOS_ROCE_PATH)
+        pfc = self._applied_config_or_none(QOS_PFC_PROFILE_PATH)
+        return FlowControl(roce_lossless=self._roce_lossless(roce or {}), pfc_profile=bool(pfc))
+
     def vlan(self, vlan_id: str) -> Vlan:
         """Single VLAN with member ports (OpenAPI operationId: getBridgeDomainVlan)."""
         self.refresh()
@@ -244,6 +262,15 @@ class NvidiaCumulusSwitch(NetworkSwitch):
         if self._interfaces_applied_cache is None:
             self._interfaces_applied_cache = self._run_api_call(INTERFACES_PATH, params={"rev": "applied"})
         return self._interfaces_applied_cache
+
+    def _applied_config_or_none(self, path: str) -> dict[str, Any] | None:
+        """The applied config at path, or None when NVUE answers 404 because nothing is configured there."""
+        try:
+            return self._run_api_call(path, params={"rev": "applied"})
+        except SwitchAPIError as error:
+            if error.status_code != 404:
+                raise
+            return None
 
     def _vlan_membership_by_id(self) -> dict[str, list[str]]:
         """Map VLAN ID to interface names assigned on the configured bridge domain."""
@@ -395,6 +422,15 @@ class NvidiaCumulusSwitch(NetworkSwitch):
             native_vlan=_vlan_id(body.get("untagged")) if access is None else access,
             learning=_LEARNING_VALUES.get(learning) if isinstance(learning, str) else None,
         )
+
+    @staticmethod
+    def _roce_lossless(body: dict[str, Any]) -> bool:
+        """True when RoCE is on in lossless mode. RoCE in another mode brings no PFC, so it does not count."""
+        state = next((body[key] for key in _ROCE_STATE_KEYS if key in body), None)
+        if state not in _ROCE_ON_VALUES:
+            return False
+        mode = body.get("mode")
+        return mode is None or mode == _ROCE_MODE_LOSSLESS
 
     def _parse_mac_table(self, entries: dict[str, Any]) -> list[MacEntry]:
         table: list[MacEntry] = []

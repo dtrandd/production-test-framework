@@ -59,6 +59,14 @@ class PortBridge:
 
 
 @dataclass(frozen=True)
+class FlowControl:
+    """The switch-wide link-level flow control configuration."""
+
+    roce_lossless: bool  # True = RoCE is on in lossless mode, the profile that carries PFC
+    pfc_profile: bool  # True = a switch-wide PFC profile is configured
+
+
+@dataclass(frozen=True)
 class SwitchProcess:
     name: str
     pid: int
