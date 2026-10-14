@@ -30,8 +30,8 @@ class LGTMConfig:
     # Target host configuration
     host: str = field(default_factory=lambda: os.getenv("REMOTE_HOST", "localhost"))
 
-    # SSH/Ansible configuration
-    ansible_remote_user: str = field(default_factory=lambda: os.getenv("ANSIBLE_REMOTE_USER", ""))
+    # SSH configuration
+    remote_user: str = field(default_factory=lambda: os.getenv("REMOTE_USER", ""))
 
     grafana_port: int = 3000
     mimir_port: int = 9009
@@ -46,7 +46,7 @@ class LGTMConfig:
 
         if is_localhost(self.host):
             return True
-        return bool(self.ansible_remote_user)
+        return bool(self.remote_user)
 
     @classmethod
     def from_env(cls) -> LGTMConfig:
@@ -58,7 +58,7 @@ class LGTMConfig:
         """The variables from_env reads; the SSH user is required only for a remote host."""
         from production_test_framework.helper import is_localhost
 
-        ssh_user = _declared()["ANSIBLE_REMOTE_USER"]
+        ssh_user = _declared()["REMOTE_USER"]
         if not is_localhost(cls.from_env().host):
             ssh_user = replace(ssh_user, required=True, fallback=None)
         return [_declared()["REMOTE_HOST"], ssh_user]

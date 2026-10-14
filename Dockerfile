@@ -73,7 +73,7 @@ echo "ANSIBLE_HOME=${ANSIBLE_HOME:-/app/framework/ansible}" > .env
 echo "ANSIBLE_INVENTORY_FILE=${ANSIBLE_INVENTORY_FILE:-/app/framework/ansible/inventory.ini}" >> .env
 echo "REMOTE_HOST=${REMOTE_HOST:-localhost}" >> .env
 echo "CLUSTER=${CLUSTER:-production-test-cluster}" >> .env
-echo "ANSIBLE_REMOTE_USER=${ANSIBLE_REMOTE_USER:-appuser}" >> .env
+echo "REMOTE_USER=${REMOTE_USER:-appuser}" >> .env
 EOF
 
 # Create the results, tests, and charts directories

@@ -106,14 +106,14 @@ class TestLGTMConfigEnvironmentVariables:
     def test_ssh_user_optional_for_localhost(self):
         with patch.dict(os.environ, {}, clear=True):
             variables = {v.name: v for v in LGTMConfig.environment_variables()}
-        assert variables["ANSIBLE_REMOTE_USER"].required is False
-        assert variables["ANSIBLE_REMOTE_USER"].fallback
+        assert variables["REMOTE_USER"].required is False
+        assert variables["REMOTE_USER"].fallback
 
     def test_ssh_user_required_for_remote_host(self):
         with patch.dict(os.environ, {"REMOTE_HOST": "remote.example.com"}, clear=True):
             variables = {v.name: v for v in LGTMConfig.environment_variables()}
-        assert variables["ANSIBLE_REMOTE_USER"].required is True
-        assert variables["ANSIBLE_REMOTE_USER"].fallback is None
+        assert variables["REMOTE_USER"].required is True
+        assert variables["REMOTE_USER"].fallback is None
 
     def test_declarations_come_from_the_package_file(self):
         with patch.dict(os.environ, {}, clear=True):

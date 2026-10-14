@@ -273,7 +273,7 @@ Provide these to the container (via a mounted `.env` or `-e` flags). See
 
 | Variable | Purpose |
 | --- | --- |
-| `ANSIBLE_REMOTE_USER` | SSH username for the target host |
+| `REMOTE_USER` | SSH username for the target host |
 | `REMOTE_HOST` | Target cluster hostname/IP |
 | `CLUSTER` | Cluster name |
 | `ANSIBLE_INVENTORY_FILE` | Path to the Ansible inventory |
