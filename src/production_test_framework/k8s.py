@@ -20,7 +20,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from production_test_framework.config import LGTMConfig
+from production_test_framework.config import LGTMConfig, _declared
+from production_test_framework.env_vars import EnvironmentVariable
 from production_test_framework.helper import is_localhost, poll_until, run_command
 from production_test_framework.ssh import CommandResult, SSHExecutor
 
@@ -115,6 +116,11 @@ class KubernetesClient:
     def __init__(self, config: LGTMConfig, ssh: SSHExecutor | None = None):
         self.config = config
         self.ssh = ssh or SSHExecutor(config)
+
+    @classmethod
+    def environment_variables(cls) -> list[EnvironmentVariable]:
+        """The variables local kubectl reads."""
+        return [_declared()["KUBECONFIG"]]
 
     def _run_kubectl_local(
         self,

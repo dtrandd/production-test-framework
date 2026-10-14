@@ -13,5 +13,5 @@ def lgtm_config():
     """LGTMConfig with test values (no real SSH)."""
     return LGTMConfig(
         host="test-host.example.com",
-        ansible_remote_user="testuser",
+        remote_user="testuser",
     )

@@ -943,7 +943,7 @@ class TestKubernetesClientLocalhost:
 
     @pytest.fixture
     def localhost_config(self):
-        return LGTMConfig(host="localhost", ansible_remote_user="u")
+        return LGTMConfig(host="localhost", remote_user="u")
 
     def test_localhost_uses_subprocess_not_ssh(self, localhost_config, mock_ssh):
         client = KubernetesClient(localhost_config, ssh=mock_ssh)
@@ -964,7 +964,7 @@ class TestKubernetesClientLocalhost:
             assert "get nodes -o wide --no-headers" in " ".join(cmd)
 
     def test_127_0_0_1_uses_subprocess(self, mock_ssh):
-        cfg = LGTMConfig(host="127.0.0.1", ansible_remote_user="u")
+        cfg = LGTMConfig(host="127.0.0.1", remote_user="u")
         client = KubernetesClient(cfg, ssh=mock_ssh)
         with patch("production_test_framework.helper.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
