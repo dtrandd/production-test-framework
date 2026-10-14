@@ -38,8 +38,8 @@ def pytest_addoption(parser):
         dest="report_file",
         help=(
             "Write one report to PATH: the run summary followed by the result tables the "
-            "tests emit. Without this the same tables print to stdout, which is what CI and "
-            "a bare pytest run want. --report-html is kept as an alias."
+            "tests emit. Without this the same tables are logged at INFO, shown live when "
+            "log_cli is enabled. --report-html is kept as an alias."
         ),
     )
     group.addoption(

@@ -179,7 +179,7 @@ class NcclWorkload(DockerContainerMixin, CommandWorkload):
         wl = NcclWorkload(test=NcclTest.ALL_REDUCE, gpus_per_host=4, max_bytes="128M")
         wl.start()
         wl.wait_for_completion(timeout=900)
-        print(wl.get_result().result.avg_bus_bandwidth_gbps)
+        bandwidth = wl.get_result().result.avg_bus_bandwidth_gbps
     """
 
     workload_name = "NCCL"
