@@ -3,6 +3,8 @@
 
 """Unit tests for the run report: grouping, failures, the header and the logo."""
 
+import logging
+
 import pytest
 
 from production_test_framework.reporting.assets import Logo, load_logo
@@ -487,14 +489,15 @@ class TestStatusClasses:
         assert "warn" in self.cell_class(report, "wobbly", status_classes={"wobbly": "warn"})
 
 
-class TestStdoutMode:
-    """Without a path the tables print instead, and nothing is written."""
+class TestNoFileMode:
+    """Without a path the tables are logged instead, and nothing is written."""
 
-    def test_no_file_is_written(self, capsys):
+    def test_no_file_is_written(self, caplog):
         reporter = Reporter(None)
         assert reporter.writes_file is False
-        reporter.table(["a"], [["1"]], title="A table")
-        assert "A table" in capsys.readouterr().out
+        with caplog.at_level(logging.INFO, logger="production_test_framework.reporting.report"):
+            reporter.table(["a"], [["1"]], title="A table")
+        assert "A table" in caplog.text
 
 
 class TestReportWorkloadResult:
