@@ -14,6 +14,7 @@ import re
 import shlex
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any
 
 from production_test_framework.ssh import CommandResult
@@ -21,15 +22,19 @@ from production_test_framework.workload.command_workload import CommandWorkload,
 from production_test_framework.workload.docker_mixin import DockerContainerMixin
 
 __all__ = [
+    "DEFAULT_AGENTIC_OPTIONS",
     "DEFAULT_BENCHMARK_OPTIONS",
+    "DEFAULT_INFERENCEX_MODE",
     "DEFAULT_PYTHON_PATH",
     "JSON_RESULT_INDICATOR",
     "BenchmarkCancelled",
     "BenchmarkResultMissing",
     "InferencexBenchmarkResult",
+    "InferencexMode",
     "InferencexWorkload",
     "WorkloadCancelled",
     "benchmark_option_argv",
+    "inferencex_options",
     "parse_benchmark_result_json",
 ]
 
@@ -67,6 +72,46 @@ DEFAULT_BENCHMARK_OPTIONS: Mapping[str, Any] = {
 # ``inferencex-e2e/`` (InferenceX #3525); listing both lets an image built either side of that
 # move import it.
 DEFAULT_PYTHON_PATH = "/workspace/InferenceX/inferencex-e2e:/workspace/InferenceX"
+
+
+class InferencexMode(StrEnum):
+    """The shape of load an InferenceX run drives."""
+
+    FIXED = "fixed"
+    AGENTIC = "agentic"
+
+
+DEFAULT_INFERENCEX_MODE = InferencexMode.AGENTIC
+
+# Agentic load for a caller with no agentic options of its own: long prompts sharing a prefix, as
+# an agent re-sends its growing context, and short answers, as a tool call is.
+DEFAULT_AGENTIC_OPTIONS: Mapping[str, Any] = {
+    "num_prompts": 32,
+    "max_concurrency": 8,
+    "random_input_len": 8192,
+    "random_output_len": 64,
+    "random_prefix_len": 1024,
+    "random_range_ratio": 0.5,
+}
+
+
+def inferencex_options(
+    benchmark_options: Mapping[str, Any],
+    agentic_options: Mapping[str, Any] | None,
+    mode: InferencexMode | str,
+) -> dict[str, Any]:
+    """
+    The benchmark options for a run in *mode*, as a new dict the caller may extend.
+
+    Fixed mode returns *benchmark_options* as written. Agentic mode layers *agentic_options* over
+    them, or DEFAULT_AGENTIC_OPTIONS when that is None, so flags that do not describe the load's
+    shape -- warmups, ``ignore_eos`` -- apply to both. A string *mode* is validated against
+    InferencexMode, raising ValueError for anything else.
+    """
+    options = dict(benchmark_options)
+    if InferencexMode(mode) is InferencexMode.AGENTIC:
+        options.update(DEFAULT_AGENTIC_OPTIONS if agentic_options is None else agentic_options)
+    return options
 
 
 @dataclass
