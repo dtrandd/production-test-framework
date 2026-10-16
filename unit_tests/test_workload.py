@@ -26,11 +26,14 @@ from production_test_framework.vllm import DEFAULT_MODEL, InferenceResult
 from production_test_framework.workload.command_workload import CommandWorkload
 from production_test_framework.workload.docker_mixin import DockerContainerMixin
 from production_test_framework.workload.inferencex_workload import (
+    DEFAULT_AGENTIC_OPTIONS,
     DEFAULT_BENCHMARK_OPTIONS,
     JSON_RESULT_INDICATOR,
     BenchmarkResultMissing,
+    InferencexMode,
     InferencexWorkload,
     benchmark_option_argv,
+    inferencex_options,
     parse_benchmark_result_json,
 )
 from production_test_framework.workload.nccl_workload import (
@@ -562,6 +565,50 @@ class TestBenchmarkOptionArgv:
             "--invented-upstream-flag",
             "3",
         ]
+
+
+class TestInferencexOptions:
+    """Tests for assembling a run's options from its mode."""
+
+    BENCHMARK = {"num_prompts": 4, "ignore_eos": True}
+
+    def test_fixed_mode_uses_benchmark_options_as_written(self):
+        assert inferencex_options(self.BENCHMARK, {"random_input_len": 8192}, InferencexMode.FIXED) == {
+            "num_prompts": 4,
+            "ignore_eos": True,
+        }
+
+    def test_agentic_mode_layers_agentic_options_over_benchmark_options(self):
+        agentic = {"num_prompts": 8, "random_input_len": 8192}
+        assert inferencex_options(self.BENCHMARK, agentic, InferencexMode.AGENTIC) == {
+            "num_prompts": 8,
+            "ignore_eos": True,
+            "random_input_len": 8192,
+        }
+
+    def test_agentic_mode_without_agentic_options_uses_the_defaults(self):
+        assert inferencex_options(self.BENCHMARK, None, InferencexMode.AGENTIC) == {
+            "num_prompts": 4,
+            "ignore_eos": True,
+            **DEFAULT_AGENTIC_OPTIONS,
+        }
+
+    def test_empty_agentic_options_override_nothing(self):
+        assert inferencex_options(self.BENCHMARK, {}, InferencexMode.AGENTIC) == self.BENCHMARK
+
+    def test_mode_may_be_given_as_a_string(self):
+        assert inferencex_options(self.BENCHMARK, None, "agentic") == inferencex_options(
+            self.BENCHMARK, None, InferencexMode.AGENTIC
+        )
+
+    def test_unknown_mode_is_rejected(self):
+        with pytest.raises(ValueError, match="bogus"):
+            inferencex_options(self.BENCHMARK, None, "bogus")
+
+    def test_result_is_a_copy(self):
+        inferencex_options(self.BENCHMARK, None, InferencexMode.AGENTIC)["model"] = "other/model"
+        assert "model" not in self.BENCHMARK
+        assert "model" not in DEFAULT_AGENTIC_OPTIONS
 
 
 class TestBenchmarkResultJsonParsing:
