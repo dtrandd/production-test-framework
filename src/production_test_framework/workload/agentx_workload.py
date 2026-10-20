@@ -15,7 +15,7 @@ import os
 import re
 import shutil
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -50,6 +50,7 @@ EXTRA_REQUIREMENTS = ("datasets>=4.7.0",)
 
 AGGREGATE_FILE = "profile_export_aiperf.json"
 RESULT_FILENAME = "agentx_result"
+SERVER_LOG_FILENAME = "server.log"
 
 # aiperf draws on a 1600x800 canvas, so its text and markers shrink to nothing at report width.
 # Half the canvas at twice the scale keeps the resolution and doubles their relative size. Its
@@ -300,7 +301,8 @@ class AgentxWorkload(CommandWorkload):
 
     *aiperf_options* become flags by the same rules as ``InferencexWorkload``'s
     ``benchmark_options``. *scoring_env* describes the deployment to InferenceX's scoring
-    (``TP``, ``FRAMEWORK``, ``MODEL`` ...).
+    (``TP``, ``FRAMEWORK``, ``MODEL`` ...). *server_log* returns the inference server's log,
+    from which the scoring reads the GPU KV cache capacity; without it that is left unset.
     """
 
     workload_name = "AgentX"
@@ -315,6 +317,7 @@ class AgentxWorkload(CommandWorkload):
         timeout: float = 7200.0,
         plots: bool = True,
         browser_path: str | None = None,
+        server_log: Callable[[], str | None] | None = None,
     ):
         super().__init__(timeout=timeout)
         self._harness = harness
@@ -324,6 +327,7 @@ class AgentxWorkload(CommandWorkload):
         self._scoring_env = dict(scoring_env or {})
         self._plots = plots
         self._browser_path = browser_path
+        self._server_log = server_log
 
     @property
     def aiperf_options(self) -> dict[str, Any]:
@@ -397,6 +401,9 @@ class AgentxWorkload(CommandWorkload):
 
     def _score(self) -> tuple[dict[str, Any] | None, str]:
         """InferenceX's AgentX aggregate, or ``(None, reason)`` when it could not be built."""
+        # The scoring parses the server's KV cache capacity from RESULT_DIR/server.log.
+        if self._server_log is not None and (log := self._server_log()):
+            (self._run_dir / SERVER_LOG_FILENAME).write_text(log, encoding="utf-8")
         env = {
             "KV_OFFLOADING": "none",
             "IS_MULTINODE": "false",
