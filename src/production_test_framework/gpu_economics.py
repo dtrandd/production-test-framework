@@ -13,7 +13,7 @@ does not cover and should be overridden when a better figure is known.
 import math
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 __all__ = [
@@ -23,6 +23,7 @@ __all__ = [
     "ECONOMICS_METRICS",
     "GPU_ECONOMICS",
     "MODEL_TOKEN_PRICES",
+    "SYSTEM_QUERY",
     "X_AXIS_METRICS",
     "EconomicsInputs",
     "GpuEconomics",
@@ -37,6 +38,10 @@ __all__ = [
 DEFAULT_HOST_WATTS_PER_GPU = 350.0
 # power_model's air-cooled facility PUE.
 DEFAULT_PUE = 1.3
+
+#: The origin of an input probed from the running system, such as server wall power, rather
+#: than configured.
+SYSTEM_QUERY = "system query"
 
 #: ``owning`` is InferenceX's default basis ("H" metrics); ``rental`` is its "R" variant.
 COST_BASES = ("owning", "rental")
@@ -163,6 +168,10 @@ class EconomicsInputs:
     input_price_per_million: float | None
     output_price_per_million: float | None
     sources: Mapping[str, str]
+    #: The values ``all_in_watts_per_gpu`` was computed from -- ``tdp_w``,
+    #: ``host_watts_per_gpu``, ``server_watts``, ``gpus_per_server``, ``pue`` -- each with its
+    #: origin in :attr:`sources`. Empty when the figure was used as given or published.
+    power_inputs: Mapping[str, float] = field(default_factory=dict)
 
 
 def _number(overrides: Mapping[str, Any], key: str) -> float | None:
@@ -171,7 +180,10 @@ def _number(overrides: Mapping[str, Any], key: str) -> float | None:
 
 
 def resolve_economics(
-    gpu_name: str | None, model: str | None, overrides: Mapping[str, Any] | None = None
+    gpu_name: str | None,
+    model: str | None,
+    overrides: Mapping[str, Any] | None = None,
+    origins: Mapping[str, str] | None = None,
 ) -> EconomicsInputs:
     """
     The defaults for *gpu_name* and *model*, with *overrides* applied.
@@ -179,34 +191,51 @@ def resolve_economics(
     *overrides* takes ``gpu``, ``cost_basis``, ``cost_per_gpu_hour``, ``input_price_per_million``,
     ``output_price_per_million`` and, for power, the first of: ``all_in_watts_per_gpu``;
     ``server_watts`` measured at the wall under load, spread over ``gpus_per_server`` and times
-    ``pue``; ``host_watts_per_gpu`` and ``pue`` to re-estimate from TDP.
+    ``pue``; ``host_watts_per_gpu`` and ``pue`` to re-estimate from TDP. A GPU whose published
+    figure is itself that estimate is re-estimated the same way, so its inputs are recorded.
+
+    *origins* names where an override came from, e.g. ``"AgentX profile"`` or
+    :data:`SYSTEM_QUERY`, and becomes its source; an override with none is ``"override"``.
     """
     overrides = overrides or {}
     sources: dict[str, str] = {}
+    power_inputs: dict[str, float] = {}
     found = lookup_gpu(overrides.get("gpu") or gpu_name)
     key, gpu = found if found else (None, None)
+
+    def origin(name: str) -> str:
+        return (origins or {}).get(name, "override")
+
+    def power_input(name: str, default: float | None = None) -> float:
+        """Record an input to the power figure: its override, else *default*."""
+        value = _number(overrides, name)
+        power_inputs[name], sources[name] = (default, "default") if value is None else (value, origin(name))
+        return power_inputs[name]
+
+    if overrides.get("gpu"):
+        sources["gpu"] = origin("gpu")
 
     basis = str(overrides.get("cost_basis") or "owning")
     if basis not in COST_BASES:
         raise ValueError(f"cost_basis must be one of {', '.join(COST_BASES)}, not {basis!r}")
+    sources["cost_basis"] = origin("cost_basis") if overrides.get("cost_basis") else "default"
 
-    pue = _number(overrides, "pue")
     if (watts := _number(overrides, "all_in_watts_per_gpu")) is not None:
-        sources["all_in_watts_per_gpu"] = "override"
-    elif (server := _number(overrides, "server_watts")) is not None:
+        sources["all_in_watts_per_gpu"] = origin("all_in_watts_per_gpu")
+    elif _number(overrides, "server_watts") is not None:
         gpus = _number(overrides, "gpus_per_server")
         if not gpus or gpus <= 0:
             raise ValueError("server_watts needs gpus_per_server, the GPUs that power is shared by")
-        watts = server * (DEFAULT_PUE if pue is None else pue) / gpus
-        sources["all_in_watts_per_gpu"] = "measured server_watts x pue / gpus_per_server"
-    elif gpu is not None and ("host_watts_per_gpu" in overrides or "pue" in overrides):
-        host = _number(overrides, "host_watts_per_gpu")
+        watts = power_input("server_watts") * power_input("pue", DEFAULT_PUE) / power_input("gpus_per_server")
+        sources["all_in_watts_per_gpu"] = "server_watts x pue / gpus_per_server"
+    elif gpu is not None and (
+        "host_watts_per_gpu" in overrides or "pue" in overrides or gpu.power_source == ESTIMATED_POWER
+    ):
+        power_inputs["tdp_w"], sources["tdp_w"] = gpu.tdp_w, "GPU defaults"
         watts = estimate_all_in_watts(
-            gpu.tdp_w,
-            DEFAULT_HOST_WATTS_PER_GPU if host is None else host,
-            DEFAULT_PUE if pue is None else pue,
+            gpu.tdp_w, power_input("host_watts_per_gpu", DEFAULT_HOST_WATTS_PER_GPU), power_input("pue", DEFAULT_PUE)
         )
-        sources["all_in_watts_per_gpu"] = "estimated from TDP, host_watts_per_gpu and pue"
+        sources["all_in_watts_per_gpu"] = "(tdp_w + host_watts_per_gpu) x pue"
     elif gpu is not None:
         watts = gpu.all_in_w
         sources["all_in_watts_per_gpu"] = gpu.power_source
@@ -214,11 +243,12 @@ def resolve_economics(
         watts = None
 
     if (cost := _number(overrides, "cost_per_gpu_hour")) is not None:
-        sources["cost_per_gpu_hour"] = "override"
+        sources["cost_per_gpu_hour"] = origin("cost_per_gpu_hour")
     elif gpu is not None:
         owning, rental = gpu.owning_cost_per_hour, gpu.rental_cost_per_hour
         cost = owning if basis == "owning" else rental
         if cost is None and (cost := rental if basis == "owning" else owning) is not None:
+            sources["cost_basis"] = f"{sources['cost_basis']} {basis}, which {gpu.label} has no rate for"
             basis = "rental" if basis == "owning" else "owning"
         if cost is not None:
             sources["cost_per_gpu_hour"] = f"{gpu.cost_source} ({basis})"
@@ -228,7 +258,7 @@ def resolve_economics(
     for side in ("input", "output"):
         field = f"{side}_price_per_million"
         if (value := _number(overrides, field)) is not None:
-            sources[field] = "override"
+            sources[field] = origin(field)
         elif price is not None:
             value = getattr(price, side)
             sources[field] = price.source
@@ -242,6 +272,7 @@ def resolve_economics(
         input_price_per_million=prices["input"],
         output_price_per_million=prices["output"],
         sources=sources,
+        power_inputs=power_inputs,
     )
 
 

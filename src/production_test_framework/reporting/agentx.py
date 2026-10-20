@@ -6,12 +6,12 @@ Report an AgentX run: the options it ran with, every metric it produced, and its
 
 import base64
 import html
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any
 
-from ..gpu_economics import ECONOMICS_METRICS, X_AXIS_METRICS, EconomicsInputs, economics_metrics
+from ..gpu_economics import ECONOMICS_METRICS, SYSTEM_QUERY, X_AXIS_METRICS, EconomicsInputs, economics_metrics
 from ..power import PowerSummary
 from ..workload.agentx_workload import AgentxResult, AgentxWorkload
 from ..workload.workload import WorkloadResult
@@ -209,13 +209,27 @@ def png_figure(path: Path, caption: str = "") -> str:
     )
 
 
-def report_agentx_configuration(reporter, workload: AgentxWorkload, extra_rows: list[list[str]] | None = None) -> None:
-    """The options and harness a run uses, recorded before it starts so a failed run still has them."""
+def report_agentx_configuration(
+    reporter,
+    workload: AgentxWorkload,
+    extra_rows: list[list[str]] | None = None,
+    system_queried: Collection[str] = (),
+) -> None:
+    """
+    The options and harness a run uses, recorded before it starts so a failed run still has them.
+
+    The values of the options in *system_queried*, probed from the server rather than
+    configured, are marked as such.
+    """
     options = workload.aiperf_options
     options["output_artifact_dir"] = display_path(Path(options["output_artifact_dir"]))
+    rows = benchmark_option_rows(options)
+    for row in rows:
+        if row[0] in system_queried:
+            row[1] = f"{row[1]} ({SYSTEM_QUERY})"
     reporter.table(
         ["option", "value", "aiperf flag"],
-        benchmark_option_rows(options),
+        rows,
         title="Workload configuration -- AgentX",
         left={2},
     )
@@ -324,13 +338,36 @@ def agentx_economics(
     return y, x
 
 
+#: (field, label, unit) for each value the all-in power can be computed from, in formula order.
+POWER_INPUT_ROWS = (
+    ("tdp_w", "GPU TDP", "W/GPU"),
+    ("host_watts_per_gpu", "host power share", "W/GPU"),
+    ("server_watts", "server wall power", "W"),
+    ("gpus_per_server", "GPUs sharing server power", ""),
+    ("pue", "PUE", ""),
+)
+
+
+def _sourced(inputs: EconomicsInputs, field: str, value: Any, unit: str) -> str:
+    """*value* as a cell, marked when it was probed from the system rather than configured."""
+    text = _cell(value, unit)
+    return f"{text} ({SYSTEM_QUERY})" if inputs.sources.get(field) == SYSTEM_QUERY else text
+
+
 def agentx_economics_input_rows(inputs: EconomicsInputs) -> list[list[str]]:
-    """The economics inputs as (input, value, unit, source) rows."""
+    """
+    The economics inputs as (input, value, unit, source) rows, including every value the
+    all-in power was computed from.
+    """
     not_set = "not configured"
     rows = [
-        ["GPU defaults", inputs.gpu or "no match -- set economics.gpu", "", ""],
-        ["cost basis", inputs.cost_basis, "", ""],
+        ["GPU defaults", inputs.gpu or "no match -- set economics.gpu", "", inputs.sources.get("gpu", "")],
+        ["cost basis", inputs.cost_basis, "", inputs.sources.get("cost_basis", "")],
     ]
+    for field, label, unit in POWER_INPUT_ROWS:
+        if field in inputs.power_inputs:
+            value = inputs.power_inputs[field]
+            rows.append([label, _sourced(inputs, field, value, unit), unit, inputs.sources.get(field, "")])
     for field, label, unit in (
         ("all_in_watts_per_gpu", "all-in provisioned power", "W/GPU"),
         ("cost_per_gpu_hour", "TCO", "$/GPU/hr"),
@@ -338,7 +375,8 @@ def agentx_economics_input_rows(inputs: EconomicsInputs) -> list[list[str]]:
         ("output_price_per_million", "output token price", "$/M tokens"),
     ):
         value = getattr(inputs, field)
-        rows.append([label, not_set if value is None else _cell(value, unit), unit, inputs.sources.get(field, "")])
+        text = not_set if value is None else _sourced(inputs, field, value, unit)
+        rows.append([label, text, unit, inputs.sources.get(field, "")])
     return rows
 
 

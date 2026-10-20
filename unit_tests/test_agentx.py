@@ -207,6 +207,13 @@ class TestReportAgentx:
         assert workload.harness.harness_ref in html
         assert "two-gpu" in html
 
+    def test_configuration_marks_options_queried_from_the_server(self, report, workload):
+        report.start_test("t.py::a")
+        report_agentx.report_agentx_configuration(report, workload, system_queried={"concurrency"})
+        html = _rendered(report)
+        assert "8 (system query)" in html
+        assert "--concurrency 8" in html
+
     def test_result_tables_come_before_figures(self, report, workload, tmp_path):
         png = tmp_path / "ttft_over_time.png"
         png.write_bytes(b"\x89PNG fake")

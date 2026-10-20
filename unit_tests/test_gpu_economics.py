@@ -8,6 +8,7 @@ import pytest
 from production_test_framework.gpu_economics import (
     ECONOMICS_METRICS,
     GPU_ECONOMICS,
+    SYSTEM_QUERY,
     economics_metrics,
     estimate_all_in_watts,
     lookup_gpu,
@@ -62,6 +63,7 @@ class TestResolveEconomics:
     def test_owning_falls_back_to_rental_when_unpublished(self):
         inputs = resolve_economics("rtx-pro-2000-blackwell", None)
         assert (inputs.cost_basis, inputs.cost_per_gpu_hour) == ("rental", 0.17)
+        assert inputs.sources["cost_basis"] == "default owning, which RTX PRO 2000 Blackwell has no rate for"
 
     def test_overrides_win(self):
         inputs = resolve_economics(
@@ -82,7 +84,31 @@ class TestResolveEconomics:
             "rtx-pro-2000-blackwell", None, {"server_watts": 600, "gpus_per_server": 2, "pue": 1.2}
         )
         assert inputs.all_in_watts_per_gpu == pytest.approx(600 * 1.2 / 2)
-        assert inputs.sources["all_in_watts_per_gpu"].startswith("measured")
+        assert inputs.sources["all_in_watts_per_gpu"] == "server_watts x pue / gpus_per_server"
+        assert inputs.power_inputs == {"server_watts": 600, "gpus_per_server": 2, "pue": 1.2}
+
+    def test_origins_name_where_each_override_came_from(self):
+        inputs = resolve_economics(
+            "rtx-pro-2000-blackwell",
+            None,
+            {"server_watts": 612, "gpus_per_server": 4, "cost_basis": "rental"},
+            {"server_watts": SYSTEM_QUERY, "gpus_per_server": "machine profile", "cost_basis": "AgentX profile"},
+        )
+        assert inputs.sources["server_watts"] == SYSTEM_QUERY
+        assert inputs.sources["gpus_per_server"] == "machine profile"
+        assert inputs.sources["cost_basis"] == "AgentX profile"
+        assert (inputs.power_inputs["pue"], inputs.sources["pue"]) == (1.3, "default")
+
+    def test_an_estimated_default_records_what_it_was_estimated_from(self):
+        inputs = resolve_economics("rtx-pro-2000-blackwell", None)
+        assert inputs.all_in_watts_per_gpu == GPU_ECONOMICS["rtx-pro-2000-blackwell"].all_in_w
+        assert inputs.power_inputs == {"tdp_w": 70, "host_watts_per_gpu": 350, "pue": 1.3}
+        assert inputs.sources["host_watts_per_gpu"] == "default"
+
+    def test_a_published_default_has_no_power_inputs(self):
+        inputs = resolve_economics("b200", None)
+        assert inputs.power_inputs == {}
+        assert inputs.sources["cost_basis"] == "default"
 
     def test_measured_server_power_needs_a_gpu_count(self):
         with pytest.raises(ValueError, match="gpus_per_server"):
@@ -157,6 +183,21 @@ class TestAgentxEconomicsReport:
     def test_input_rows_say_what_is_not_configured(self):
         rows = report_agentx.agentx_economics_input_rows(resolve_economics("unknown", None))
         assert ["TCO", "not configured", "$/GPU/hr", ""] in rows
+
+    def test_input_rows_show_the_power_inputs_and_mark_system_queries(self):
+        inputs = resolve_economics(
+            "rtx-pro-2000-blackwell",
+            None,
+            {"server_watts": 612, "gpus_per_server": 4},
+            {"server_watts": SYSTEM_QUERY, "gpus_per_server": "machine profile"},
+        )
+        rows = {row[0]: row for row in report_agentx.agentx_economics_input_rows(inputs)}
+        assert rows["server wall power"][1].endswith(" (system query)")
+        assert rows["server wall power"][3] == SYSTEM_QUERY
+        assert rows["GPUs sharing server power"][1:] == ["4", "", "machine profile"]
+        assert rows["PUE"][3] == "default"
+        assert not rows["all-in provisioned power"][1].endswith("(system query)")
+        assert "GPU TDP" not in rows
 
     def test_report_has_a_chart_per_metric(self, tmp_path):
         reporter = Reporter(tmp_path / "r.html", fmt=ReportFormat.HTML)

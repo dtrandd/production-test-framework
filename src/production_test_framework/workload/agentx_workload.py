@@ -330,6 +330,10 @@ class AgentxWorkload(CommandWorkload):
         return dict(self._options)
 
     @property
+    def scoring_env(self) -> dict[str, str]:
+        return dict(self._scoring_env)
+
+    @property
     def harness(self) -> AgentxHarness:
         return self._harness
 
