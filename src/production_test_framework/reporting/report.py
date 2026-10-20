@@ -17,6 +17,7 @@ whatever the suite chooses to record, so a suite that records nothing still gets
 
 import datetime as dt
 import html
+import logging
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -31,6 +32,8 @@ from .formatting import (
     render_table_html,
     render_table_markdown,
 )
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "DEFAULT_MAX_FAILURE_SNIPPETS",
@@ -270,8 +273,8 @@ class Reporter:
         )
         self._header_tables.append(table)
         if not self.writes_file:
-            print(f"\n  {title}")
-            print(render_table(table))
+            logger.info(title)
+            logger.info(render_table(table))
             return
         self.flush()
 
@@ -289,7 +292,7 @@ class Reporter:
     def note(self, text: str) -> None:
         """A line of prose -- a heading for the table that follows, or a warning."""
         if not self.writes_file:
-            print(f"  {text.strip()}")
+            logger.info(text.strip())
             return
         self._append(_Note(text.strip()))
 
@@ -302,8 +305,8 @@ class Reporter:
             return
         if not self.writes_file:
             if title:
-                print(f"\n  {title}")
-            print(text)
+                logger.info(title)
+            logger.info(text)
             return
         self._append(_Output(text, title))
 
@@ -344,8 +347,8 @@ class Reporter:
         )
         if not self.writes_file:
             if title:
-                print(f"\n  {title}")
-            print(render_table(built))
+                logger.info(title)
+            logger.info(render_table(built))
             return
         self._append(built)
 
@@ -391,7 +394,7 @@ class Reporter:
         self.flush()
 
     def flush(self) -> None:
-        """Write the report file. A no-op when reporting to stdout."""
+        """Write the report file. A no-op when there is no report file."""
         if self._path is None:
             return
         self._path.parent.mkdir(parents=True, exist_ok=True)

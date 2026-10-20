@@ -7,10 +7,8 @@ SSH remote execution utilities using Paramiko.
 Provides helpers for executing commands on remote hosts via SSH.
 """
 
-import socket
 import time
 from dataclasses import dataclass
-from typing import Optional
 
 import paramiko
 
@@ -124,9 +122,7 @@ def wait_for_ssh_password_login(
     deadline = time.monotonic() + timeout
     last = CommandResult(returncode=-1, stdout="", stderr="no attempt made")
     while time.monotonic() < deadline:
-        last = check_ssh_password_login(
-            host, username, password, port=port, timeout=connect_timeout, command=command
-        )
+        last = check_ssh_password_login(host, username, password, port=port, timeout=connect_timeout, command=command)
         if last.success:
             return last
         time.sleep(interval)
@@ -140,24 +136,24 @@ class SSHExecutor:
         self,
         config: LGTMConfig,
         *,
-        username: Optional[str] = None,
-        password: Optional[str] = None,
+        username: str | None = None,
+        password: str | None = None,
     ):
         """
         Args:
-            config: Provides the default host and the Ansible remote user.
-            username: SSH user, overriding config.ansible_remote_user.
+            config: Provides the default host and the SSH user.
+            username: SSH user, overriding config.remote_user.
             password: SSH password. When given, key and agent auth are disabled
                 so only the password is used - appliances such as lab switches
                 accept nothing else. Omit it to keep the default key/agent auth.
         """
         self.config = config
-        self.username = username or config.ansible_remote_user
+        self.username = username or config.remote_user
         self.password = password
-        self._client: Optional[paramiko.SSHClient] = None
-        self._current_host: Optional[str] = None
+        self._client: paramiko.SSHClient | None = None
+        self._current_host: str | None = None
 
-    def _get_client(self, host: Optional[str] = None) -> paramiko.SSHClient:
+    def _get_client(self, host: str | None = None) -> paramiko.SSHClient:
         """
         Get or create SSH client connection.
 
@@ -203,7 +199,7 @@ class SSHExecutor:
         except Exception as e:
             raise ConnectionError(f"Failed to connect to {host}: {e}") from e
 
-    def get_transport(self, host: Optional[str] = None) -> Optional[paramiko.Transport]:
+    def get_transport(self, host: str | None = None) -> paramiko.Transport | None:
         """
         Get the SSH transport for the connection.
 
@@ -224,9 +220,9 @@ class SSHExecutor:
     def run(
         self,
         command: str,
-        host: Optional[str] = None,
+        host: str | None = None,
         timeout: int = 60,
-        stdin_data: Optional[str] = None,
+        stdin_data: str | None = None,
     ) -> CommandResult:
         """
         Execute a command on the remote host.
@@ -270,7 +266,7 @@ class SSHExecutor:
                 stdout=stdout_str,
                 stderr=stderr_str,
             )
-        except socket.timeout:
+        except TimeoutError:
             return CommandResult(
                 returncode=-1,
                 stdout="",
@@ -286,10 +282,10 @@ class SSHExecutor:
     def run_kubectl(
         self,
         kubectl_args: str,
-        host: Optional[str] = None,
+        host: str | None = None,
         timeout: int = 60,
         kubeconfig: str = "~/.kube/config",
-        stdin_data: Optional[str] = None,
+        stdin_data: str | None = None,
     ) -> CommandResult:
         """
         Execute a kubectl command on the remote k3s host.
@@ -306,17 +302,17 @@ class SSHExecutor:
         cmd = f"kubectl --kubeconfig {kubeconfig} {kubectl_args}"
         return self.run(cmd, host=host, timeout=timeout, stdin_data=stdin_data)
 
-    def check_service_active(self, service: str, host: Optional[str] = None) -> bool:
+    def check_service_active(self, service: str, host: str | None = None) -> bool:
         """Check if a systemd service is active on the remote host."""
         result = self.run(f"systemctl is-active {service}", host=host)
         return result.success and result.stdout.strip() == "active"
 
-    def file_exists(self, path: str, host: Optional[str] = None) -> bool:
+    def file_exists(self, path: str, host: str | None = None) -> bool:
         """Check if a file exists on the remote host."""
         result = self.run(f"test -f '{path}'", host=host)
         return result.success
 
-    def read_file(self, path: str, host: Optional[str] = None) -> Optional[str]:
+    def read_file(self, path: str, host: str | None = None) -> str | None:
         """Read a file from the remote host."""
         result = self.run(f"cat '{path}'", host=host)
         return result.stdout if result.success else None

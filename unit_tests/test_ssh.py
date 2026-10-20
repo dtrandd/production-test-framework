@@ -3,7 +3,6 @@
 
 """Unit tests for ssh module."""
 
-import socket
 from unittest.mock import MagicMock, patch
 
 from production_test_framework.ssh import (
@@ -67,7 +66,7 @@ class TestSSHExecutor:
         SSHExecutor(lgtm_config).run("echo ok")
 
         kwargs = mock_client.connect.call_args.kwargs
-        assert kwargs["username"] == lgtm_config.ansible_remote_user
+        assert kwargs["username"] == lgtm_config.remote_user
         assert kwargs["password"] is None
         assert kwargs["allow_agent"] is True
         assert kwargs["look_for_keys"] is True
@@ -223,7 +222,7 @@ class TestSSHExecutor:
     def test_run_timeout_returns_command_result(self, mock_ssh_cls, lgtm_config):
         mock_client = MagicMock()
         mock_ssh_cls.return_value = mock_client
-        mock_client.exec_command.side_effect = socket.timeout()
+        mock_client.exec_command.side_effect = TimeoutError()
 
         executor = SSHExecutor(lgtm_config)
         result = executor.run("sleep 100", timeout=5)

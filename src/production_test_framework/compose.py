@@ -9,6 +9,7 @@ state through one object, so tests manage the stack instead of shelling out to
 """
 
 import json
+import re
 import subprocess
 from dataclasses import dataclass
 
@@ -63,6 +64,64 @@ class ComposeStack:
         if result.returncode != 0:
             # surface teardown failures: a left-up stack breaks the next run's bring-up
             raise RuntimeError(f"`docker compose down` failed (rc={result.returncode}):\n{result.stderr}")
+
+    def services(self) -> list[str]:
+        """Names of the stack's services."""
+        result = _run(self._args("config", "--services"), timeout=60)
+        if result.returncode != 0:
+            raise RuntimeError(f"`docker compose config --services` failed (rc={result.returncode}):\n{result.stderr}")
+        return result.stdout.split()
+
+    def pull(self, *services: str, ignore_failures: bool = False) -> list[str]:
+        """Pull the images the given services (all by default) reference in the compose files.
+
+        A failed pull raises, unless ignore_failures is set; then the failures are returned instead.
+        """
+        args = ["pull", "--ignore-pull-failures", *services] if ignore_failures else ["pull", *services]
+        result = _run(self._args(*args), timeout=900)
+        if not ignore_failures:
+            if result.returncode != 0:
+                raise RuntimeError(f"`docker compose pull` failed (rc={result.returncode}):\n{result.stderr}")
+            return []
+        # --ignore-pull-failures exits 0 even when an image fails, so failures only show in stderr.
+        errors = [line for line in result.stderr.splitlines() if "error" in line.lower() or "denied" in line.lower()]
+        if result.returncode != 0 and not errors:
+            errors = [result.stderr.strip() or f"`docker compose pull` failed (rc={result.returncode})"]
+        return errors
+
+    def conflicting_containers(self) -> list[str]:
+        """Containers from other projects that use this stack's container names or ports."""
+        result = _run(self._args("config", "--format", "json"), timeout=60)
+        if result.returncode != 0:
+            raise RuntimeError(f"`docker compose config` failed (rc={result.returncode}):\n{result.stderr}")
+        spec = json.loads(result.stdout)
+        services = spec.get("services", {}).values()
+        names = {service.get("container_name") for service in services} - {None}
+        ports = {
+            str(port["published"]) for service in services for port in service.get("ports", []) if port.get("published")
+        }
+
+        listing = _run(
+            ["docker", "ps", "-a", "--format", '{{.Names}}\t{{.Label "com.docker.compose.project"}}\t{{.Ports}}'],
+            timeout=60,
+        )
+        if listing.returncode != 0:
+            raise RuntimeError(f"`docker ps` failed (rc={listing.returncode}):\n{listing.stderr}")
+        conflicts = []
+        for line in listing.stdout.splitlines():
+            name, project, published = (line.split("\t") + ["", ""])[:3]
+            if project != spec.get("name") and (name in names or ports & set(re.findall(r":(\d+)->", published))):
+                conflicts.append(name)
+        return conflicts
+
+    def remove_conflicting_containers(self) -> list[str]:
+        """Remove the containers conflicting_containers finds. Returns their names."""
+        conflicts = self.conflicting_containers()
+        if conflicts:
+            removed = _run(["docker", "rm", "-f", *conflicts], timeout=120)
+            if removed.returncode != 0:
+                raise RuntimeError(f"`docker rm -f` of {conflicts} failed (rc={removed.returncode}):\n{removed.stderr}")
+        return conflicts
 
     def ps(self) -> list[ContainerStatus]:
         """Return the status of every container in the compose project."""
