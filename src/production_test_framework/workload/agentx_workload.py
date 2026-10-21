@@ -54,19 +54,31 @@ SERVER_LOG_FILENAME = "server.log"
 
 # aiperf draws on a 1600x800 canvas, so its text and markers shrink to nothing at report width.
 # Half the canvas at twice the scale keeps the resolution and doubles their relative size. Its
-# legends sit inside the plot over the data, so they move above it, at the top right.
+# legends sit inside the plot over the data, so they move above it, at the top right. Its
+# time-slice plots label every slice ("0-1", "1-2", ...), which a long run piles into an
+# unreadable band; those keep about MAX_TICKS ticks, each at a slice's start, in seconds.
 PLOT_COMMAND = """
+import math
 import sys
 import plotly.graph_objects as go
 import aiperf.plot.exporters.png.base as png
 png.DEFAULT_PLOT_WIDTH, png.DEFAULT_PLOT_HEIGHT, png.DEFAULT_PLOT_DPI = 900, 450, 267
+MAX_TICKS = 15
 write_image = go.Figure.write_image
+def thin_slice_ticks(fig):
+    ticks = list(fig.layout.xaxis.tickvals or ())
+    if fig.layout.xaxis.tickmode != "array" or len(ticks) <= MAX_TICKS:
+        return
+    width = ticks[1] - ticks[0]
+    starts = [tick - width / 2 for tick in ticks[:: math.ceil(len(ticks) / MAX_TICKS)]]
+    fig.update_xaxes(tickvals=starts, ticktext=[f"{start:g}" for start in starts], tickangle=0)
 def write_with_legend_above(fig, *args, **kwargs):
     top = fig.layout.margin.t if fig.layout.margin.t is not None else 80
     fig.update_layout(
         legend={"orientation": "h", "x": 1, "xanchor": "right", "y": 1.02, "yanchor": "bottom"},
         margin={"t": top + 30},
     )
+    thin_slice_ticks(fig)
     return write_image(fig, *args, **kwargs)
 go.Figure.write_image = write_with_legend_above
 from aiperf.cli import app
