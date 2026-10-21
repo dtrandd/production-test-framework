@@ -129,26 +129,29 @@ class TestAgentxWorkload:
         assert env["KV_OFFLOADING"] == "none"
         assert workload.log_path.read_text() == "log"
 
-    def test_server_log_is_where_scoring_reads_it_before_scoring(self, harness, tmp_path):
+    @pytest.mark.parametrize(
+        ("logs", "files"),
+        [
+            (["one server"], ["server.log"]),
+            (["prefill", "decode"], ["watchtower-0.out", "watchtower-1.out"]),
+        ],
+    )
+    def test_server_logs_are_where_scoring_reads_them_before_scoring(self, harness, tmp_path, logs, files):
         run_dir = tmp_path / "run"
         workload = AgentxWorkload(
-            harness=harness,
-            aiperf_options={},
-            run_dir=run_dir,
-            plots=False,
-            server_log=lambda: "INFO GPU KV cache size: 82,720 tokens",
+            harness=harness, aiperf_options={}, run_dir=run_dir, plots=False, server_log=lambda: logs
         )
         _write_aggregate(workload.artifact_dir)
         seen = []
 
         def score(argv, **kwargs):
-            seen.append((run_dir / "server.log").read_text())
+            seen.extend((run_dir / name).read_text() for name in files)
             return subprocess.CompletedProcess(argv, 1, "", "no result")
 
         with patch("production_test_framework.workload.agentx_workload.subprocess.run", side_effect=score):
             workload.parse_output(CommandResult(0, "log", ""))
 
-        assert seen == ["INFO GPU KV cache size: 82,720 tokens"]
+        assert seen == logs
 
     def test_scoring_failure_is_recorded_not_raised(self, workload):
         _write_aggregate(workload.artifact_dir)

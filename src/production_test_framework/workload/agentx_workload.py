@@ -15,7 +15,7 @@ import os
 import re
 import shutil
 import subprocess
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -301,8 +301,9 @@ class AgentxWorkload(CommandWorkload):
 
     *aiperf_options* become flags by the same rules as ``InferencexWorkload``'s
     ``benchmark_options``. *scoring_env* describes the deployment to InferenceX's scoring
-    (``TP``, ``FRAMEWORK``, ``MODEL`` ...). *server_log* returns the inference server's log,
-    from which the scoring reads the GPU KV cache capacity; without it that is left unset.
+    (``TP``, ``FRAMEWORK``, ``MODEL`` ...). *server_log* returns the inference servers' logs,
+    one per server (every prefill and decode worker when disaggregated), from which the
+    scoring reads the GPU KV cache capacity; without it that is left unset.
     """
 
     workload_name = "AgentX"
@@ -317,7 +318,7 @@ class AgentxWorkload(CommandWorkload):
         timeout: float = 7200.0,
         plots: bool = True,
         browser_path: str | None = None,
-        server_log: Callable[[], str | None] | None = None,
+        server_log: Callable[[], Sequence[str]] | None = None,
     ):
         super().__init__(timeout=timeout)
         self._harness = harness
@@ -401,9 +402,13 @@ class AgentxWorkload(CommandWorkload):
 
     def _score(self) -> tuple[dict[str, Any] | None, str]:
         """InferenceX's AgentX aggregate, or ``(None, reason)`` when it could not be built."""
-        # The scoring parses the server's KV cache capacity from RESULT_DIR/server.log.
-        if self._server_log is not None and (log := self._server_log()):
-            (self._run_dir / SERVER_LOG_FILENAME).write_text(log, encoding="utf-8")
+        # The scoring sums the KV cache capacity each log reports, from RESULT_DIR/server.log or,
+        # for several servers, one RESULT_DIR/watchtower-*.out each. One file per server matters:
+        # within a file it counts each engine once, and every server's engine is "EngineCore".
+        logs = [log for log in (self._server_log() if self._server_log else []) if log]
+        names = [SERVER_LOG_FILENAME] if len(logs) == 1 else [f"watchtower-{i}.out" for i in range(len(logs))]
+        for name, log in zip(names, logs, strict=True):
+            (self._run_dir / name).write_text(log, encoding="utf-8")
         env = {
             "KV_OFFLOADING": "none",
             "IS_MULTINODE": "false",
