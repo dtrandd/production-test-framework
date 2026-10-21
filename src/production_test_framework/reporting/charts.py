@@ -84,11 +84,11 @@ def _panel(name: str, description: str, values: list[tuple[str, float]]) -> str:
 
     return (
         "<figure class='chart'>"
+        f"<figcaption class='above'><b>{html.escape(name)}</b> — {html.escape(description)} (ms)</figcaption>"
         f"<svg viewBox='0 0 {_WIDTH} {height}' role='img' "
         f"aria-label='{html.escape(f'{name} latency percentiles, milliseconds')}'>"
         f"<line class='ca' x1='{_LABEL_GUTTER}' y1='0' x2='{_LABEL_GUTTER}' y2='{height}'/>"
         f"{''.join(marks)}</svg>"
-        f"<figcaption><b>{html.escape(name)}</b> — {html.escape(description)} (ms)</figcaption>"
         "</figure>"
     )
 

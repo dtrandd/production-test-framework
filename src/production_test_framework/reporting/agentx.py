@@ -204,8 +204,9 @@ def png_figure(path: Path, caption: str = "") -> str:
     caption = caption or Path(path).stem.replace("_", " ")
     return (
         "<figure class='chart'>"
+        f"<figcaption class='above'>{html.escape(caption)}</figcaption>"
         f"<img src='data:image/png;base64,{encoded}' alt='{html.escape(caption)}' style='width:100%;height:auto'>"
-        f"<figcaption>{html.escape(caption)}</figcaption></figure>"
+        "</figure>"
     )
 
 
