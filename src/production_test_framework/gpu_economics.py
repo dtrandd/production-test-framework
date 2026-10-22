@@ -8,13 +8,20 @@ publishes (``/api/v1/views/options`` and its chip pages), as of October 2026: TD
 provisioned watts (GPU plus its share of host CPU, NICs and cooling), and $/chip-hour for owning
 at large hyperscaler volume and for renting. Values marked ``estimate`` fill in chips InferenceX
 does not cover and should be overridden when a better figure is known.
+
+:func:`fetch_inferencex_gpus` reads InferenceX's current figures and :func:`update_gpu_economics`
+applies them to :data:`GPU_ECONOMICS` for the running process, marking each as fetched that day.
 """
 
+import dataclasses
+import datetime as dt
 import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
+
+import requests
 
 __all__ = [
     "COST_BASES",
@@ -30,8 +37,10 @@ __all__ = [
     "TokenPrice",
     "economics_metrics",
     "estimate_all_in_watts",
+    "fetch_inferencex_gpus",
     "lookup_gpu",
     "resolve_economics",
+    "update_gpu_economics",
 ]
 
 # Calibrated so H100 reproduces InferenceX's 1.37 kW: (700 W + 354 W) x 1.3.
@@ -118,6 +127,12 @@ GPU_ECONOMICS: dict[str, GpuEconomics] = {
         "InferenceX",
         ("rtx6000pro", "rtx-pro-6000", "rtx-pro-6000-blackwell-server-edition"),
     ),
+    "jalapeno": GpuEconomics(
+        "Jalapeño", "OpenAI", 700, estimate_all_in_watts(700), 1.27, 1.27, ESTIMATED_POWER, "InferenceX"
+    ),
+    "tpuv7": GpuEconomics(
+        "TPU7x", "Google", 980, estimate_all_in_watts(980), 1.21, 2.00, ESTIMATED_POWER, "InferenceX", ("tpu7x",)
+    ),
     "a100": _estimated("A100 80GB SXM", "NVIDIA", 400, 1.38, "a100-sxm4-80gb", "a100-80gb"),
     "l40s": _estimated("L40S", "NVIDIA", 350, 0.97),
     "l4": _estimated("L4", "NVIDIA", 72, 0.49),
@@ -155,6 +170,99 @@ def lookup_gpu(name: str | None) -> tuple[str, GpuEconomics] | None:
         if wanted == key or wanted in gpu.aliases:
             return key, gpu
     return None
+
+
+INFERENCEX_URL = "https://inferencex.semianalysis.com"
+INFERENCEX_TIMEOUT = 30.0
+
+_CHIP_LINK = re.compile(r"/chips/([a-z0-9-]+)")
+_ALL_IN_POWER = re.compile(r"All-in power per chip\s*([\d,.]+)\s*(k?W)")
+
+
+def _get(url: str, timeout: float) -> requests.Response:
+    response = requests.get(url, timeout=timeout)
+    response.raise_for_status()
+    return response
+
+
+def _all_in_watts(chip_page: str) -> float | None:
+    """The "All-in power per chip" a chip page states, in watts, or None if it states none."""
+    text = re.sub(r"<script[^>]*>.*?</script>", " ", chip_page, flags=re.S)
+    text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text))
+    if match := _ALL_IN_POWER.search(text):
+        return float(match.group(1).replace(",", "")) * (1000 if match.group(2) == "kW" else 1)
+    return None
+
+
+def fetch_inferencex_gpus(
+    base_url: str = INFERENCEX_URL, timeout: float = INFERENCEX_TIMEOUT
+) -> dict[str, GpuEconomics]:
+    """
+    Every chip InferenceX publishes now, by its key: TDP and $/chip-hour for owning and renting
+    from its options API, and all-in power from the chip's page under ``/chips`` -- estimated
+    from TDP for a chip without one.
+
+    Raises :class:`requests.RequestException`, or ``ValueError``/``KeyError`` for a response not
+    in the shape expected.
+    """
+    source = f"InferenceX, fetched {dt.date.today().isoformat()}"
+    hardware = _get(f"{base_url}/api/v1/views/options", timeout).json()["hardware"]
+    # A chip's page is its key, or its key and system, e.g. gb200-nvl72; -vs- pages compare two.
+    pages = sorted(slug for slug in _CHIP_LINK.findall(_get(f"{base_url}/chips", timeout).text) if "-vs-" not in slug)
+
+    chips = {}
+    for chip in hardware:
+        key, tdp, cost = chip["key"], float(chip["tdpW"]), chip.get("costPerHour") or {}
+        page = next((slug for slug in pages if slug == key or slug.startswith(f"{key}-")), None)
+        all_in = _all_in_watts(_get(f"{base_url}/chips/{page}", timeout).text) if page else None
+        chips[key] = GpuEconomics(
+            label=chip["label"],
+            vendor=chip["vendor"],
+            tdp_w=tdp,
+            all_in_w=estimate_all_in_watts(tdp) if all_in is None else all_in,
+            owning_cost_per_hour=cost.get("h"),
+            rental_cost_per_hour=cost.get("r"),
+            power_source=ESTIMATED_POWER if all_in is None else source,
+            cost_source=source,
+            # So a chip added from here is found by its name too, e.g. a profile's sku.
+            aliases=tuple({_normalise(chip["label"])} - {key}),
+        )
+    return chips
+
+
+def update_gpu_economics(fetched: Mapping[str, GpuEconomics]) -> list[str]:
+    """
+    Apply *fetched* (from :func:`fetch_inferencex_gpus`) to :data:`GPU_ECONOMICS` in place.
+
+    A chip already there, found by key, alias or label, takes the fetched TDP and costs, and the
+    fetched all-in power when InferenceX publishes one; an all-in power that was only estimated
+    is re-estimated from the new TDP, and any other is kept. A chip not there is added. Returns
+    the keys updated or added.
+    """
+    updated = []
+    for key, chip in fetched.items():
+        found = lookup_gpu(key) or lookup_gpu(chip.label)
+        if found is None:
+            GPU_ECONOMICS[key] = chip
+            updated.append(key)
+            continue
+        ours_key, ours = found
+        if chip.power_source != ESTIMATED_POWER:
+            power = {"all_in_w": chip.all_in_w, "power_source": chip.power_source}
+        elif ours.power_source == ESTIMATED_POWER:
+            power = {"all_in_w": estimate_all_in_watts(chip.tdp_w)}
+        else:
+            power = {}
+        GPU_ECONOMICS[ours_key] = dataclasses.replace(
+            ours,
+            tdp_w=chip.tdp_w,
+            owning_cost_per_hour=chip.owning_cost_per_hour,
+            rental_cost_per_hour=chip.rental_cost_per_hour,
+            cost_source=chip.cost_source,
+            **power,
+        )
+        updated.append(ours_key)
+    return updated
 
 
 @dataclass(frozen=True)

@@ -3,16 +3,22 @@
 
 """Unit tests for the GPU economics defaults and derived metrics."""
 
-import pytest
+from unittest.mock import MagicMock, patch
 
+import pytest
+import requests
+
+from production_test_framework import gpu_economics
 from production_test_framework.gpu_economics import (
     ECONOMICS_METRICS,
     GPU_ECONOMICS,
     SYSTEM_QUERY,
     economics_metrics,
     estimate_all_in_watts,
+    fetch_inferencex_gpus,
     lookup_gpu,
     resolve_economics,
+    update_gpu_economics,
 )
 from production_test_framework.reporting import agentx as report_agentx
 from production_test_framework.reporting.charts import scatter_figure
@@ -126,6 +132,79 @@ class TestResolveEconomics:
     def test_bad_cost_basis_is_rejected(self):
         with pytest.raises(ValueError, match="cost_basis"):
             resolve_economics("b200", None, {"cost_basis": "leased"})
+
+
+#: A stand-in for inferencex.semianalysis.com: an H100 priced up, with its page, and a new chip
+#: with neither a page nor an entry here.
+INFERENCEX_PAGES = {
+    "/api/v1/views/options": {
+        "hardware": [
+            {"key": "h100", "label": "H100", "vendor": "NVIDIA", "tdpW": 700, "costPerHour": {"h": 1.5, "r": 2.5}},
+            {"key": "newchip", "label": "New Chip", "vendor": "Acme", "tdpW": 500, "costPerHour": {"h": 1, "r": 2}},
+        ]
+    },
+    "/chips": "<a href='/chips/h100'>H100</a> <a href='/chips/h100-vs-b200'>vs</a>",
+    "/chips/h100": "<dt>TDP per chip</dt><dd>700 W</dd><dt>All-in power per chip</dt><dd>1.42 kW</dd>",
+}
+
+
+def _inferencex_get(url, timeout):
+    page = INFERENCEX_PAGES[url.removeprefix(gpu_economics.INFERENCEX_URL)]
+    response = MagicMock()
+    response.json.return_value = page
+    response.text = page if isinstance(page, str) else ""
+    return response
+
+
+@pytest.fixture
+def table(monkeypatch):
+    """GPU_ECONOMICS as a copy, so an update does not outlive the test."""
+    copy = dict(GPU_ECONOMICS)
+    monkeypatch.setattr(gpu_economics, "GPU_ECONOMICS", copy)
+    return copy
+
+
+class TestInferencexRefresh:
+    def test_fetch_reads_costs_and_the_chip_page_power(self):
+        with patch.object(gpu_economics.requests, "get", side_effect=_inferencex_get):
+            chips = fetch_inferencex_gpus()
+
+        h100 = chips["h100"]
+        assert (h100.tdp_w, h100.all_in_w, h100.owning_cost_per_hour, h100.rental_cost_per_hour) == (
+            700,
+            1420,
+            1.5,
+            2.5,
+        )
+        assert h100.power_source.startswith("InferenceX, fetched ")
+        assert chips["newchip"].all_in_w == estimate_all_in_watts(500)
+        assert chips["newchip"].power_source == gpu_economics.ESTIMATED_POWER
+
+    def test_update_replaces_known_chips_and_adds_new_ones(self, table):
+        with patch.object(gpu_economics.requests, "get", side_effect=_inferencex_get):
+            updated = update_gpu_economics(fetch_inferencex_gpus())
+
+        assert updated == ["h100", "newchip"]
+        assert (table["h100"].owning_cost_per_hour, table["h100"].all_in_w) == (1.5, 1420)
+        assert table["h100"].aliases == GPU_ECONOMICS["h100"].aliases
+        assert lookup_gpu("New Chip")[0] == "newchip"
+        assert resolve_economics("h100", None).sources["cost_per_gpu_hour"].startswith("InferenceX, fetched ")
+
+    def test_update_keeps_an_all_in_figure_inferencex_does_not_publish(self, table):
+        fetched = {"vr200": gpu_economics.GpuEconomics("Vera Rubin NVL72", "NVIDIA", 1800, 1.0, 4.0, 9.0, "x", "y")}
+        fetched["vr200"] = gpu_economics.dataclasses.replace(
+            fetched["vr200"], power_source=gpu_economics.ESTIMATED_POWER
+        )
+        update_gpu_economics(fetched)
+        assert table["vr200"].all_in_w == GPU_ECONOMICS["vr200"].all_in_w
+        assert table["vr200"].owning_cost_per_hour == 4.0
+
+    def test_an_unreachable_site_raises(self):
+        with (
+            patch.object(gpu_economics.requests, "get", side_effect=requests.ConnectionError("down")),
+            pytest.raises(requests.ConnectionError),
+        ):
+            fetch_inferencex_gpus()
 
 
 class TestEconomicsMetrics:
