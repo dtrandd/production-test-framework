@@ -8,8 +8,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from production_test_framework import model_fit
-from production_test_framework.model_fit import GIB, disk_shortfall, gpu_shortfall, model_footprint
+from production_test_framework.agentx import model_fit
+from production_test_framework.agentx.model_fit import GIB, disk_shortfall, gpu_shortfall, model_footprint
 
 #: Shaped like Qwen3-8B: 36 layers, 8 KV heads of 128, bfloat16.
 CONFIG = {

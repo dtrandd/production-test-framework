@@ -11,7 +11,7 @@ import statistics
 import threading
 from dataclasses import dataclass, field
 
-from .helper import run_command
+from ..helper import run_command
 
 __all__ = [
     "GPU_POWER_COMMAND",

@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from production_test_framework.power import (
+from production_test_framework.agentx.power import (
     PowerReadingUnavailable,
     PowerSampler,
     gpu_power_watts,
@@ -26,7 +26,7 @@ DCMI_OUTPUT = """
 
 
 def _patched(*results):
-    return patch("production_test_framework.power.run_command", side_effect=list(results))
+    return patch("production_test_framework.agentx.power.run_command", side_effect=list(results))
 
 
 class TestGpuPower:

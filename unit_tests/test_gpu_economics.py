@@ -8,8 +8,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from production_test_framework import gpu_economics
-from production_test_framework.gpu_economics import (
+from production_test_framework.agentx import gpu_economics
+from production_test_framework.agentx.gpu_economics import (
     ECONOMICS_METRICS,
     GPU_ECONOMICS,
     SYSTEM_QUERY,

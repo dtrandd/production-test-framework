@@ -11,8 +11,8 @@ from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any
 
-from ..gpu_economics import ECONOMICS_METRICS, SYSTEM_QUERY, X_AXIS_METRICS, EconomicsInputs, economics_metrics
-from ..power import PowerSummary
+from ..agentx.gpu_economics import ECONOMICS_METRICS, SYSTEM_QUERY, X_AXIS_METRICS, EconomicsInputs, economics_metrics
+from ..agentx.power import PowerSummary
 from ..workload.agentx_workload import AgentxResult, AgentxWorkload
 from ..workload.workload import WorkloadResult
 from .charts import latency_percentile_figure, scatter_figure
