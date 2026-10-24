@@ -9,7 +9,13 @@ import pytest
 import requests
 
 from production_test_framework.agentx import model_fit
-from production_test_framework.agentx.model_fit import GIB, disk_shortfall, gpu_shortfall, model_footprint
+from production_test_framework.agentx.model_fit import (
+    GIB,
+    disk_shortfall,
+    gpu_shortfall,
+    model_footprint,
+    rope_override_problem,
+)
 
 #: Shaped like Qwen3-8B: 36 layers, 8 KV heads of 128, bfloat16.
 CONFIG = {
@@ -118,3 +124,57 @@ class TestShortfalls:
             gpu_shortfall(footprint, gpu_bytes=16 * GIB, tensor_parallel=2, memory_utilization=0.9, max_model_len=65536)
             is None
         )
+
+
+YARN = {"rope_parameters": {"rope_type": "yarn", "factor": 2.0, "original_max_position_embeddings": 32768}}
+
+
+def _footprint(**config):
+    return model_fit.ModelFootprint("acme/model", 0, 0, 0, {**CONFIG, **config})
+
+
+class TestRopeOverride:
+    def test_an_override_a_long_context_model_does_not_need_is_commented_out(self):
+        message = rope_override_problem(
+            _footprint(max_position_embeddings=131072, rope_scaling={"rope_type": "yarn", "factor": 32.0}),
+            {"hf_overrides": YARN},
+            65536,
+            profile="agentx/muscae.yaml",
+        )
+        assert "handles 131,072 tokens on its own" in message
+        assert "Comment out (or delete) these lines in agentx/muscae.yaml" in message
+        assert message.endswith(
+            "# vllm_args:\n#   hf_overrides:\n#     rope_parameters: "
+            "{rope_type: yarn, factor: 2.0, original_max_position_embeddings: 32768}"
+        )
+
+    def test_other_flags_stay_when_the_override_is_commented_out(self):
+        message = rope_override_problem(
+            _footprint(max_position_embeddings=131072), {"max_num_seqs": 16, "hf_overrides": YARN}, 65536
+        )
+        assert message.endswith(
+            "vllm_args:\n  max_num_seqs: 16\n#   hf_overrides:\n#     rope_parameters: "
+            "{rope_type: yarn, factor: 2.0, original_max_position_embeddings: 32768}"
+        )
+
+    def test_a_short_context_model_without_an_override_is_told_the_lines_to_add(self):
+        message = rope_override_problem(
+            _footprint(max_position_embeddings=40960, rope_theta=1000000), {}, 65536, min_context=44048
+        )
+        assert "handles 40,960 tokens on its own, less than max_model_len 65,536" in message
+        assert (
+            "vllm_args:\n  hf_overrides:\n    rope_parameters: {rope_type: yarn, factor: 1.6, "
+            "original_max_position_embeddings: 40960, rope_theta: 1000000}"
+        ) in message
+        assert "max_model_len it reaches" not in message, "40,960 is under the 44,048 AgentX needs"
+
+    def test_a_lower_max_model_len_is_offered_when_it_still_holds_enough(self):
+        message = rope_override_problem(_footprint(max_position_embeddings=40960), {}, 65536, min_context=32768)
+        assert message.endswith("or a max_model_len it reaches:\n\nvllm_args:\n  max_model_len: 40960")
+
+    @pytest.mark.parametrize(
+        ("native", "vllm_args"),
+        [(40960, {"hf_overrides": YARN}), (131072, {}), (131072, {"max_num_seqs": 16})],
+    )
+    def test_a_profile_that_suits_the_model_passes(self, native, vllm_args):
+        assert rope_override_problem(_footprint(max_position_embeddings=native), vllm_args, 65536) is None

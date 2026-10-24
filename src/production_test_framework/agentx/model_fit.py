@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import requests
+import yaml
 
 __all__ = [
     "HF_URL",
@@ -26,7 +27,11 @@ __all__ = [
     "disk_shortfall",
     "gpu_shortfall",
     "model_footprint",
+    "rope_override_problem",
 ]
+
+#: Where a RoPE override sits in vLLM's --hf-overrides: rope_parameters, or the older name.
+ROPE_KEYS = ("rope_parameters", "rope_scaling")
 
 HF_URL = "https://huggingface.co"
 HF_TIMEOUT = 30.0
@@ -195,5 +200,105 @@ def gpu_shortfall(
             f"{shape}. Its {_gib(weights)} of weights leave {_gib(max(kv_room, 0))} for the KV cache, but one "
             f"{max_model_len:,}-token request needs {_gib(kv_needed)}. Lower max_model_len in vllm_args, use "
             "more GPUs (tensor_parallel), or a smaller model."
+        )
+    return None
+
+
+def _yaml(mapping: dict[str, Any], indent: int = 0) -> list[str]:
+    """*mapping* as YAML lines indented by *indent* spaces, innermost mappings on one line."""
+
+    def inline(value: Any) -> str:
+        return yaml.safe_dump(value, default_flow_style=True, sort_keys=False, width=1000).removesuffix("...\n").strip()
+
+    lines = []
+    for key, value in mapping.items():
+        if isinstance(value, dict) and any(isinstance(inner, dict) for inner in value.values()):
+            lines += [f"{' ' * indent}{key}:", *_yaml(value, indent + 2)]
+        else:
+            lines.append(f"{' ' * indent}{key}: {inline(value)}")
+    return lines
+
+
+def _section(vllm_args: dict[str, Any]) -> str:
+    """A profile's vllm_args section, as it would be written there."""
+    return "\n".join(["vllm_args:", *_yaml(vllm_args, 2)])
+
+
+def _commented_out(vllm_args: dict[str, Any], rope_key: str) -> str:
+    """The profile's vllm_args with its RoPE override, and any key left empty by it, commented out."""
+    hf_overrides = vllm_args["hf_overrides"]
+    hf_left = {key: value for key, value in hf_overrides.items() if key != rope_key}
+    args_left = len(vllm_args) > 1 or hf_left
+    lines = [("" if args_left else "# ") + "vllm_args:"]
+    for key, value in vllm_args.items():
+        if key != "hf_overrides":
+            lines += _yaml({key: value}, 2)
+            continue
+        lines.append(("  " if hf_left else "# ") + ("hf_overrides:" if hf_left else "  hf_overrides:"))
+        for sub_key, sub_value in hf_overrides.items():
+            sub_lines = _yaml({sub_key: sub_value}, 4)
+            lines += [f"# {line}" if sub_key == rope_key else line for line in sub_lines]
+    return "\n".join(lines)
+
+
+def rope_override_problem(
+    footprint: ModelFootprint,
+    profile_vllm_args: dict[str, Any],
+    max_model_len: int | None,
+    *,
+    min_context: int = 0,
+    profile: str = "the profile",
+) -> str | None:
+    """
+    Why the RoPE override in *profile_vllm_args* (the profile's own ``vllm_args``) does not suit
+    the model, with the lines *profile* needs instead; None when it suits.
+
+    An override is wrong for a model whose own context already reaches *max_model_len*: vLLM
+    puts it in place of the model's own RoPE settings, which can break the model outright.
+    Without one, a model whose context falls short of *max_model_len* will not start; the fix
+    is an override, or a max_model_len it reaches when that still holds *min_context* tokens.
+    """
+    config = footprint.config.get("text_config") or footprint.config
+    native = config.get("max_position_embeddings")
+    if not native or not max_model_len:
+        return None
+    hf_overrides = profile_vllm_args.get("hf_overrides") or {}
+    rope_key = next((key for key in ROPE_KEYS if hf_overrides.get(key)), None)
+    own = config.get("rope_parameters") or config.get("rope_scaling")
+    own_text = f" (its own RoPE: {', '.join(f'{k} {v}' for k, v in own.items())})" if own else ""
+
+    if rope_key and native >= max_model_len:
+        return (
+            f"vllm_args.hf_overrides.{rope_key} in {profile} is not for {footprint.repo}, which handles "
+            f"{native:,} tokens on its own{own_text}, already more than max_model_len {max_model_len:,}. vLLM "
+            "would put the override in place of the model's own settings, and the model can fail to load "
+            f"(gpt-oss models fail with KeyError: 'beta_fast'). Comment out (or delete) these lines in {profile}:\n\n"
+            f"{_commented_out(profile_vllm_args, rope_key)}"
+        )
+    if not rope_key and native < max_model_len:
+        stretched = {
+            **profile_vllm_args,
+            "hf_overrides": {
+                **hf_overrides,
+                "rope_parameters": {
+                    "rope_type": "yarn",
+                    "factor": round(max_model_len / native, 2),
+                    "original_max_position_embeddings": native,
+                    "rope_theta": config.get("rope_theta", 10000),
+                },
+            },
+        }
+        reachable = native >= min_context
+        options = [
+            f"{'either ' if reachable else ''}a RoPE override that stretches it to {max_model_len:,}, using the "
+            f"model card's recommended values where it gives them:\n\n{_section(stretched)}"
+        ]
+        if reachable:
+            options.append(
+                f"or a max_model_len it reaches:\n\n{_section({**profile_vllm_args, 'max_model_len': native})}"
+            )
+        return (
+            f"{footprint.repo} handles {native:,} tokens on its own{own_text}, less than max_model_len "
+            f"{max_model_len:,}, so vLLM will not start it. Set in {profile} " + "\n\n".join(options)
         )
     return None
