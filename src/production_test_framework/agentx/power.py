@@ -15,10 +15,12 @@ from ..helper import run_command
 
 __all__ = [
     "GPU_POWER_COMMAND",
+    "NEEDS_SUDO",
     "SERVER_POWER_COMMAND",
     "PowerReadingUnavailable",
     "PowerSampler",
     "PowerSummary",
+    "SudoRequired",
     "gpu_power_watts",
     "server_power_watts",
 ]
@@ -28,6 +30,9 @@ SERVER_POWER_COMMAND = ("sudo", "ipmitool", "dcmi", "power", "reading")
 
 DEFAULT_SAMPLE_INTERVAL = 5.0
 
+#: Shown in place of a reading that needs root when sudo cannot run without a password.
+NEEDS_SUDO = "need sudo privileges"
+
 
 class PowerReadingUnavailable(RuntimeError):
     """A reading could not be taken; :attr:`command` is what to run by hand instead."""
@@ -36,6 +41,10 @@ class PowerReadingUnavailable(RuntimeError):
         super().__init__(f"{command}: {reason}")
         self.command = command
         self.reason = reason
+
+
+class SudoRequired(PowerReadingUnavailable):
+    """The reading needs root, and sudo would not run without a password."""
 
 
 def gpu_power_watts() -> list[tuple[float, float]]:
@@ -62,7 +71,8 @@ def server_power_watts() -> float:
     sudo, *rest = SERVER_POWER_COMMAND
     result = run_command([sudo, "-n", *rest], timeout=30)
     if not result.success:
-        raise PowerReadingUnavailable(command, (result.stderr or f"exit status {result.returncode}").splitlines()[0])
+        reason = (result.stderr or f"exit status {result.returncode}").splitlines()[0]
+        raise (SudoRequired if reason.startswith("sudo:") else PowerReadingUnavailable)(command, reason)
     match = re.search(r"Instantaneous power reading:\s*([\d.]+)\s*Watts", result.stdout)
     if match is None:
         raise PowerReadingUnavailable(command, "no instantaneous power reading in its output")
@@ -80,14 +90,21 @@ class PowerSummary:
     gpu_max_w: float | None = None
     server_avg_w: float | None = None
     server_max_w: float | None = None
+    server_unavailable: str | None = None
     errors: list[str] = field(default_factory=list)
 
 
 class PowerSampler:
-    """Sample GPU power, and server power when *server* is set, every *interval* seconds."""
+    """
+    Sample GPU power, and server power when *server* is set, every *interval* seconds.
+    *server_unavailable* says why server power is not sampled, e.g. :data:`NEEDS_SUDO`.
+    """
 
-    def __init__(self, *, server: bool = False, interval: float = DEFAULT_SAMPLE_INTERVAL):
+    def __init__(
+        self, *, server: bool = False, server_unavailable: str | None = None, interval: float = DEFAULT_SAMPLE_INTERVAL
+    ):
         self._server = server
+        self._server_unavailable = server_unavailable
         self._interval = interval
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -135,5 +152,6 @@ class PowerSampler:
             gpu_max_w=max(self._gpu) if self._gpu else None,
             server_avg_w=statistics.mean(self._wall) if self._wall else None,
             server_max_w=max(self._wall) if self._wall else None,
+            server_unavailable=self._server_unavailable,
             errors=list(self._errors.values()),
         )

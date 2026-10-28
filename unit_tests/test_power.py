@@ -8,8 +8,10 @@ from unittest.mock import patch
 import pytest
 
 from production_test_framework.agentx.power import (
+    NEEDS_SUDO,
     PowerReadingUnavailable,
     PowerSampler,
+    SudoRequired,
     gpu_power_watts,
     server_power_watts,
 )
@@ -49,10 +51,16 @@ class TestServerPower:
 
     def test_sudo_needing_a_password_is_unavailable(self):
         with _patched(CommandResult(1, "", "sudo: a password is required")):
-            with pytest.raises(PowerReadingUnavailable) as exc:
+            with pytest.raises(SudoRequired) as exc:
                 server_power_watts()
         assert exc.value.command == "sudo ipmitool dcmi power reading"
         assert "password is required" in exc.value.reason
+
+    def test_a_bmc_failure_is_not_a_sudo_problem(self):
+        with _patched(CommandResult(1, "", "Could not open device at /dev/ipmi0")):
+            with pytest.raises(PowerReadingUnavailable) as exc:
+                server_power_watts()
+        assert not isinstance(exc.value, SudoRequired)
 
 
 class TestPowerSampler:
@@ -92,3 +100,7 @@ class TestPowerSampler:
     def test_rows_say_what_was_not_measured(self):
         rows = {row[0]: row[1] for row in power_summary_rows(PowerSampler().stop())}
         assert rows["server wall power mean"] == "not measured"
+
+    def test_rows_say_why_server_power_was_not_measured(self):
+        rows = {row[0]: row[1] for row in power_summary_rows(PowerSampler(server_unavailable=NEEDS_SUDO).stop())}
+        assert rows["server wall power mean"] == rows["server wall power max"] == "need sudo privileges"

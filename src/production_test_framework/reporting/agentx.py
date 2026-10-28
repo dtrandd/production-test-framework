@@ -396,14 +396,15 @@ def agentx_economics_input_rows(inputs: EconomicsInputs) -> list[list[str]]:
 def power_summary_rows(power: PowerSummary) -> list[list[str]]:
     """What a power sampler measured during the run, as (measure, value, unit) rows."""
     not_measured = "not measured"
+    no_server = power.server_unavailable or not_measured
     return [
         ["samples", _cell(power.samples), ""],
         ["GPUs sampled", _cell(power.gpu_count), ""],
         ["GPU power limit", _cell(power.gpu_limit_w), "W/GPU"],
         ["GPU power mean", _cell(power.gpu_avg_w) if power.gpu_avg_w is not None else not_measured, "W/GPU"],
         ["GPU power max", _cell(power.gpu_max_w) if power.gpu_max_w is not None else not_measured, "W/GPU"],
-        ["server wall power mean", _cell(power.server_avg_w) if power.server_avg_w is not None else not_measured, "W"],
-        ["server wall power max", _cell(power.server_max_w) if power.server_max_w is not None else not_measured, "W"],
+        ["server wall power mean", _cell(power.server_avg_w) if power.server_avg_w is not None else no_server, "W"],
+        ["server wall power max", _cell(power.server_max_w) if power.server_max_w is not None else no_server, "W"],
     ]
 
 
