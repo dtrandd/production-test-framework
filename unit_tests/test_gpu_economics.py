@@ -68,7 +68,7 @@ class TestResolveEconomics:
 
     def test_owning_falls_back_to_rental_when_unpublished(self):
         inputs = resolve_economics("rtx-pro-2000-blackwell", None)
-        assert (inputs.cost_basis, inputs.cost_per_gpu_hour) == ("rental", 0.17)
+        assert (inputs.cost_basis, inputs.cost_per_gpu_hour) == ("rental", 0.21)
         assert inputs.sources["cost_basis"] == "default owning, which RTX PRO 2000 Blackwell has no rate for"
 
     def test_overrides_win(self):

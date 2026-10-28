@@ -136,7 +136,17 @@ GPU_ECONOMICS: dict[str, GpuEconomics] = {
     "a100": _estimated("A100 80GB SXM", "NVIDIA", 400, 1.38, "a100-sxm4-80gb", "a100-80gb"),
     "l40s": _estimated("L40S", "NVIDIA", 350, 0.97),
     "l4": _estimated("L4", "NVIDIA", 72, 0.49),
-    "rtx-pro-2000-blackwell": _estimated("RTX PRO 2000 Blackwell", "NVIDIA", 70, 0.17, "rtx-pro-2000"),
+    "rtx-pro-2000-blackwell": GpuEconomics(
+        "RTX PRO 2000 Blackwell",
+        "NVIDIA",
+        70,
+        estimate_all_in_watts(70),
+        None,
+        0.21,
+        ESTIMATED_POWER,
+        "getdeploying.com: lowest rental (24-month reserved), October 2026",
+        ("rtx-pro-2000",),
+    ),
     "mi350x": _estimated("MI350X", "AMD", 1000, 3.40, "instinct-mi350x"),
 }
 
