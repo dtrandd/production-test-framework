@@ -286,6 +286,28 @@ class TestAgentxRows:
         assert rows["theoretical prefix cache hit rate"] == "90.00%"
         assert rows["submission valid"] == "false"
 
+    def test_token_rows_end_with_the_in_out_ratio_of_the_means(self):
+        """The vela run's figures: 32,013 tokens in and 567 out per request on average."""
+        tokens = {
+            "input": {"mean": 32013.1, "p50": 32197.5},
+            "output_actual": {"mean": 567.4, "p50": 369},
+            "output_expected": {"mean": 440.9},
+        }
+        rows = report_agentx.agentx_token_rows(tokens)
+        assert [row[0] for row in rows] == ["input", "output_actual", "output_expected", "tokens in/out ratio"]
+        assert rows[-1] == ["tokens in/out ratio", "ratio", "56:1", "-", "-", "-", "-", "-"]
+
+    @pytest.mark.parametrize(
+        ("tokens", "ratio"),
+        [
+            ({"input": {"mean": 100}, "output_actual": {"mean": 400}}, "0.25:1"),
+            ({"input": {"mean": 100}, "output_actual": {"mean": 0}}, "-"),
+            ({"input": {"mean": 100}}, "-"),
+        ],
+    )
+    def test_token_ratio_below_one_or_without_output(self, tokens, ratio):
+        assert report_agentx.agentx_token_rows(tokens)[-1][2] == ratio
+
     def test_summary_rows_survive_no_scoring(self, tmp_path):
         result = AgentxResult(run_dir=tmp_path, artifact_dir=tmp_path, aggregate=AGGREGATE)
         rows = {row[0]: row[1] for row in report_agentx.agentx_summary_rows(result)}

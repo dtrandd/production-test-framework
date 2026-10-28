@@ -18,12 +18,14 @@ from ..workload.workload import WorkloadResult
 from .charts import latency_percentile_figure, scatter_figure
 from .environment import benchmark_option_rows, display_path
 from .formatting import format_duration, format_number
+from .workload import _token_ratio
 
 __all__ = [
     "agentx_economics",
     "agentx_economics_input_rows",
     "agentx_latency_figure",
     "agentx_stat_rows",
+    "agentx_token_rows",
     "agentx_summary_rows",
     "aiperf_metric_rows",
     "flattened_rows",
@@ -160,6 +162,17 @@ def agentx_stat_rows(families: Mapping[str, Any], units: Mapping[str, str] | Non
     return rows
 
 
+def agentx_token_rows(tokens: Mapping[str, Any]) -> list[list[str]]:
+    """
+    The tokens-per-request distributions, then the tokens in/out ratio as the InferenceX report
+    gives it: mean input over mean actual output, which is total in over total out since every
+    request counts in both. Only the mean column: a ratio of percentiles is no percentile.
+    """
+    rows = agentx_stat_rows(tokens, dict.fromkeys(tokens, "tokens"))
+    ratio = _token_ratio(_get(tokens, "input", "mean"), _get(tokens, "output_actual", "mean"))
+    return [*rows, ["tokens in/out ratio", "ratio", ratio, *("-" for _ in STAT_COLUMNS[1:])]]
+
+
 def aiperf_metric_rows(metrics: Mapping[str, Mapping[str, Any]]) -> list[list[str]]:
     """Every aiperf metric with its unit and :data:`AIPERF_STAT_COLUMNS`."""
     return [
@@ -268,8 +281,7 @@ def _report_agentx_tables(reporter, result: AgentxResult, runtime: float) -> Non
             headers, agentx_stat_rows(latency, LATENCY_UNITS), title="AgentX latency and interactivity", left={1}
         )
     if tokens := _get(scored, "request_metrics", "tokens"):
-        units = dict.fromkeys(tokens, "tokens")
-        reporter.table(headers, agentx_stat_rows(tokens, units), title="AgentX tokens per request", left={1})
+        reporter.table(headers, agentx_token_rows(tokens), title="AgentX tokens per request", left={1})
     if server := scored.get("server_metrics"):
         reporter.table(["metric", "value"], flattened_rows(server), title="AgentX server metrics", left={1})
 
