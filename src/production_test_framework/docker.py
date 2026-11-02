@@ -9,6 +9,8 @@ import itertools
 import os
 import subprocess
 
+from .host import Host
+
 __all__ = [
     "CONTAINER_LABEL",
     "docker_argv",
@@ -57,16 +59,18 @@ def label_args(name: str, extra: dict[str, str] | None = None) -> list[str]:
     return args
 
 
-def force_remove_container(name: str, *, sudo: bool = False, timeout: float = 30.0) -> bool:
+def force_remove_container(name: str, *, sudo: bool = False, timeout: float = 30.0, host: Host | None = None) -> bool:
     """
-    Remove *name*, killing it first if it is still running. True when it is gone.
+    Remove *name*, killing it first if it is still running. True when it is gone. With *host*,
+    the container is on that machine.
 
     Safe to call when the container has already exited under ``--rm``: a missing container
     counts as success, so this can run unconditionally after every command.
     """
+    argv = docker_argv("rm", "--force", name, sudo=sudo)
     try:
         completed = subprocess.run(
-            docker_argv("rm", "--force", name, sudo=sudo),
+            host.argv(argv) if host else argv,
             capture_output=True,
             text=True,
             timeout=timeout,

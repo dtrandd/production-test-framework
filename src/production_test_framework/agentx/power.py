@@ -12,6 +12,7 @@ import threading
 from dataclasses import dataclass, field
 
 from ..helper import run_command
+from ..host import Host
 
 __all__ = [
     "GPU_POWER_COMMAND",
@@ -47,10 +48,14 @@ class SudoRequired(PowerReadingUnavailable):
     """The reading needs root, and sudo would not run without a password."""
 
 
-def gpu_power_watts() -> list[tuple[float, float]]:
-    """``(draw, limit)`` watts for each NVIDIA GPU on this host."""
+def _argv(command: tuple[str, ...], host: Host | None) -> list[str]:
+    return host.argv(command) if host else list(command)
+
+
+def gpu_power_watts(host: Host | None = None) -> list[tuple[float, float]]:
+    """``(draw, limit)`` watts for each NVIDIA GPU on *host*, else this machine."""
     command = shlex.join(GPU_POWER_COMMAND)
-    result = run_command(list(GPU_POWER_COMMAND), timeout=15)
+    result = run_command(_argv(GPU_POWER_COMMAND, host), timeout=15)
     if not result.success:
         raise PowerReadingUnavailable(command, result.stderr or f"exit status {result.returncode}")
     readings = []
@@ -65,11 +70,11 @@ def gpu_power_watts() -> list[tuple[float, float]]:
     return readings
 
 
-def server_power_watts() -> float:
-    """The BMC's instantaneous wall power for the whole server, through non-interactive sudo."""
+def server_power_watts(host: Host | None = None) -> float:
+    """The BMC's instantaneous wall power for *host*, else this machine, through non-interactive sudo."""
     command = shlex.join(SERVER_POWER_COMMAND)
     sudo, *rest = SERVER_POWER_COMMAND
-    result = run_command([sudo, "-n", *rest], timeout=30)
+    result = run_command(_argv((sudo, "-n", *rest), host), timeout=30)
     if not result.success:
         reason = (result.stderr or f"exit status {result.returncode}").splitlines()[0]
         raise (SudoRequired if reason.startswith("sudo:") else PowerReadingUnavailable)(command, reason)
@@ -96,14 +101,21 @@ class PowerSummary:
 
 class PowerSampler:
     """
-    Sample GPU power, and server power when *server* is set, every *interval* seconds.
-    *server_unavailable* says why server power is not sampled, e.g. :data:`NEEDS_SUDO`.
+    Sample GPU power, and server power when *server* is set, every *interval* seconds, on
+    *host*, else this machine. *server_unavailable* says why server power is not sampled, e.g.
+    :data:`NEEDS_SUDO`.
     """
 
     def __init__(
-        self, *, server: bool = False, server_unavailable: str | None = None, interval: float = DEFAULT_SAMPLE_INTERVAL
+        self,
+        *,
+        server: bool = False,
+        server_unavailable: str | None = None,
+        interval: float = DEFAULT_SAMPLE_INTERVAL,
+        host: Host | None = None,
     ):
         self._server = server
+        self._host = host
         self._server_unavailable = server_unavailable
         self._interval = interval
         self._stop = threading.Event()
@@ -118,7 +130,7 @@ class PowerSampler:
     def _sample(self) -> None:
         self._samples += 1
         try:
-            readings = gpu_power_watts()
+            readings = gpu_power_watts(self._host)
             self._gpu_count = len(readings)
             self._gpu.append(statistics.mean(draw for draw, _ in readings))
             self._limits = [limit for _, limit in readings]
@@ -126,7 +138,7 @@ class PowerSampler:
             self._errors.setdefault("gpu", str(exc))
         if self._server:
             try:
-                self._wall.append(server_power_watts())
+                self._wall.append(server_power_watts(self._host))
             except PowerReadingUnavailable as exc:
                 self._errors.setdefault("server", str(exc))
 

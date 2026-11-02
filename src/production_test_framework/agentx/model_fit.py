@@ -7,19 +7,22 @@ and its weights plus the KV cache of one full-length request in each GPU's memor
 
 Both are estimates made before anything is downloaded or started, so a run that cannot work
 fails at once with the reason, rather than partway through a download or after loading the
-weights. The sizes come from the Hugging Face API, or from the local cache when the model is
-already there and the API cannot be reached.
+weights. The sizes come from the Hugging Face API, or from the cache when the model is already
+there and the API cannot be reached. The cache can be on another machine, read over ssh.
 """
 
 import fnmatch
 import json
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import requests
 import yaml
+
+from ..host import Host
 
 __all__ = [
     "HF_URL",
@@ -114,15 +117,45 @@ def _cached_sizes(snapshot: Path | None) -> dict[str, int]:
     }
 
 
+#: Prints the newest snapshot directory under $1, then each complete file in it as "path<TAB>size".
+_REMOTE_SNAPSHOT_SCRIPT = (
+    'snapshot=$(ls -1td "$1"/*/ 2>/dev/null | head -n 1); [ -n "$snapshot" ] || exit 0; '
+    'echo "$snapshot"; cd "$snapshot" && find -L . -type f -printf \'%P\\t%s\\n\''
+)
+
+
+def _remote_cache(host: Host, cache_dir: str, repo: str) -> tuple[dict[str, int], Callable[[], dict[str, Any]]]:
+    """The cached sizes of *repo* in *cache_dir* on *host*, and how to read its cached config."""
+    result = host.shell(_REMOTE_SNAPSHOT_SCRIPT, f"{cache_dir}/hub/models--{repo.replace('/', '--')}/snapshots")
+    snapshot, *files = result.stdout.splitlines() if result.success and result.stdout else [""]
+    cached = {}
+    for line in files:
+        name, _, size = line.rpartition("\t")
+        if size.isdigit():
+            cached[name] = int(size)
+    return cached, lambda: json.loads(host.run(["cat", f"{snapshot.rstrip('/')}/config.json"]).stdout)
+
+
+def _local_cache(cache_dir: Path, repo: str) -> tuple[dict[str, int], Callable[[], dict[str, Any]]]:
+    snapshot = _snapshot(cache_dir, repo)
+    return _cached_sizes(snapshot), lambda: json.loads((snapshot / "config.json").read_text(encoding="utf-8"))
+
+
 def model_footprint(
-    repo: str, cache_dir: Path, token: str | None = None, timeout: float = HF_TIMEOUT
+    repo: str,
+    cache_dir: Path | str,
+    token: str | None = None,
+    timeout: float = HF_TIMEOUT,
+    host: Host | None = None,
 ) -> ModelFootprint | None:
     """
     *repo*'s footprint, from the Hugging Face API, else from the copy in *cache_dir* (the
-    ``HF_HOME`` directory) when it has its config. None when neither can say.
+    ``HF_HOME`` directory, on *host* when given) when it has its config. None when neither can say.
     """
-    snapshot = _snapshot(cache_dir, repo)
-    cached = _cached_sizes(snapshot)
+    if host is None or host.local:
+        cached, cached_config = _local_cache(Path(cache_dir), repo)
+    else:
+        cached, cached_config = _remote_cache(host, str(cache_dir), repo)
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     try:
         info = requests.get(f"{HF_URL}/api/models/{repo}?blobs=true", headers=headers, timeout=timeout)
@@ -135,7 +168,7 @@ def model_footprint(
         if "config.json" not in cached:
             return None
         sizes = cached
-        config = json.loads((snapshot / "config.json").read_text(encoding="utf-8"))
+        config = cached_config()
 
     downloaded, loaded = _vllm_files(sizes)
     return ModelFootprint(
@@ -155,7 +188,7 @@ def _gib(value: float) -> str:
     return f"{value / GIB:,.1f} GiB"
 
 
-def disk_shortfall(footprint: ModelFootprint, cache_dir: Path, free_bytes: int) -> str | None:
+def disk_shortfall(footprint: ModelFootprint, cache_dir: Path | str, free_bytes: int) -> str | None:
     """Why the model's download cannot fit in *free_bytes* at *cache_dir*, or None if it can."""
     if footprint.missing_bytes <= free_bytes:
         return None

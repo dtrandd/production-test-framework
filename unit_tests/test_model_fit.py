@@ -16,6 +16,8 @@ from production_test_framework.agentx.model_fit import (
     model_footprint,
     rope_override_problem,
 )
+from production_test_framework.host import Host
+from production_test_framework.ssh import CommandResult
 
 #: Shaped like Qwen3-8B: 36 layers, 8 KV heads of 128, bfloat16.
 CONFIG = {
@@ -86,6 +88,27 @@ class TestModelFootprint:
             footprint = model_footprint("acme/model", cache)
         assert footprint.weight_bytes == 100
         assert footprint.missing_bytes == 0
+
+    def test_reads_another_hosts_cache_over_ssh(self, hf):
+        listing = "/data/hf/hub/models--acme--model/snapshots/abc/\nconfig.json\t1000\nmodel-00001.safetensors\t5\n"
+        with patch("production_test_framework.host.run_command", return_value=CommandResult(0, listing, "")) as run:
+            footprint = model_footprint("acme/model", "/data/hf", host=Host("gpu-node"))
+        assert footprint.cached_bytes == 1000, "the partial safetensors does not count"
+        assert run.call_args.args[0][0] == "ssh"
+        assert run.call_args.args[0][-1].endswith("/data/hf/hub/models--acme--model/snapshots")
+
+    def test_offline_falls_back_to_the_remote_cache(self):
+        listing = "/data/hf/hub/models--acme--model/snapshots/abc/\nconfig.json\t2\nmodel.safetensors\t100\n"
+        import json
+
+        results = [CommandResult(0, listing, ""), CommandResult(0, json.dumps(CONFIG), "")]
+        with (
+            patch.object(model_fit.requests, "get", side_effect=requests.ConnectionError("offline")),
+            patch("production_test_framework.host.run_command", side_effect=results) as run,
+        ):
+            footprint = model_footprint("acme/model", "/data/hf", host=Host("gpu-node"))
+        assert (footprint.weight_bytes, footprint.missing_bytes) == (100, 0)
+        assert run.call_args.args[0][-1].endswith("cat /data/hf/hub/models--acme--model/snapshots/abc/config.json")
 
     def test_unknown_without_the_api_or_a_cached_config(self, tmp_path):
         with patch.object(model_fit.requests, "get", side_effect=requests.ConnectionError("offline")):

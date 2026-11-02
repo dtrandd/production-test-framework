@@ -15,6 +15,7 @@ from production_test_framework.agentx.power import (
     gpu_power_watts,
     server_power_watts,
 )
+from production_test_framework.host import Host
 from production_test_framework.reporting.agentx import power_summary_rows
 from production_test_framework.ssh import CommandResult
 
@@ -56,6 +57,17 @@ class TestServerPower:
         assert exc.value.command == "sudo ipmitool dcmi power reading"
         assert "password is required" in exc.value.reason
 
+    def test_reads_another_host_over_ssh(self):
+        with _patched(CommandResult(0, DCMI_OUTPUT, "")) as run:
+            assert server_power_watts(Host("gpu-node")) == 225.0
+        argv = run.call_args.args[0]
+        assert argv[0] == "ssh" and argv[-1] == "sudo -n ipmitool dcmi power reading"
+
+    def test_remote_sudo_needing_a_password_is_still_a_sudo_problem(self):
+        with _patched(CommandResult(1, "", "sudo: a password is required")):
+            with pytest.raises(SudoRequired):
+                server_power_watts(Host("gpu-node"))
+
     def test_a_bmc_failure_is_not_a_sudo_problem(self):
         with _patched(CommandResult(1, "", "Could not open device at /dev/ipmi0")):
             with pytest.raises(PowerReadingUnavailable) as exc:
@@ -86,6 +98,13 @@ class TestPowerSampler:
         assert (summary.gpu_avg_w, summary.gpu_max_w) == (25, 35)
         assert (summary.server_avg_w, summary.server_max_w) == (250, 275)
         assert summary.errors == []
+
+    def test_samples_the_given_host(self):
+        sampler = PowerSampler(host=Host("gpu-node"))
+        with _patched(CommandResult(0, "10, 70", "")) as run:
+            sampler._sample()
+        assert run.call_args.args[0][0] == "ssh"
+        assert sampler.stop().gpu_avg_w == 10
 
     def test_errors_are_recorded_once(self):
         sampler = PowerSampler(server=True)
