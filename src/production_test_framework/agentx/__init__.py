@@ -9,5 +9,6 @@ Helpers for SemiAnalysis's AgentX benchmark. The workload itself is
 * :mod:`~.gpu_economics` -- per-GPU power and cost inputs, from InferenceX, and the metrics
   they derive.
 * :mod:`~.power` -- GPU and server wall power sampled during a run.
-* :mod:`~.model_fit` -- whether a Hugging Face model fits a machine's disk and GPUs for vLLM.
+
+Starting the vLLM server it measures is :mod:`production_test_framework.vllm.server`.
 """

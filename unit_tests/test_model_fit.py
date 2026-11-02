@@ -8,16 +8,16 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from production_test_framework.agentx import model_fit
-from production_test_framework.agentx.model_fit import (
+from production_test_framework.host import Host
+from production_test_framework.ssh import CommandResult
+from production_test_framework.vllm import model_fit
+from production_test_framework.vllm.model_fit import (
     GIB,
     disk_shortfall,
     gpu_shortfall,
     model_footprint,
     rope_override_problem,
 )
-from production_test_framework.host import Host
-from production_test_framework.ssh import CommandResult
 
 #: Shaped like Qwen3-8B: 36 layers, 8 KV heads of 128, bfloat16.
 CONFIG = {
