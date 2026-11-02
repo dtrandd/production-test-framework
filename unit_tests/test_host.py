@@ -3,6 +3,7 @@
 
 """Unit tests for running commands on this machine or over ssh."""
 
+import subprocess
 from unittest.mock import patch
 
 import pytest
@@ -89,3 +90,39 @@ class TestDockerOnAHost:
             assert force_remove_container("agentx-vllm-1-0", host=Host("gpu-node"))
         argv = run.call_args.args[0]
         assert argv[0] == "ssh" and argv[-1] == "docker rm --force agentx-vllm-1-0"
+
+
+class TestForceRemove:
+    @staticmethod
+    def _completed(returncode, stderr=""):
+        return subprocess.CompletedProcess([], returncode, "", stderr)
+
+    def test_retries_a_container_still_dying_after_its_kill(self):
+        slow = self._completed(
+            1, "could not kill container: tried to kill container, but did not receive an exit event"
+        )
+        with (
+            patch("production_test_framework.docker.subprocess.run", side_effect=[slow, self._completed(0)]) as run,
+            patch("production_test_framework.docker.time.sleep"),
+        ):
+            assert force_remove_container("agentx-vllm-1-0")
+        assert run.call_count == 2
+
+    def test_a_missing_container_is_already_removed(self):
+        with patch(
+            "production_test_framework.docker.subprocess.run",
+            return_value=self._completed(1, "Error: No such container: x"),
+        ):
+            assert force_remove_container("x")
+
+    def test_gives_up_on_a_dying_container_at_the_timeout(self):
+        dying = self._completed(1, "removal of container x is already in progress")
+        with patch("production_test_framework.docker.subprocess.run", return_value=dying) as run:
+            assert not force_remove_container("x", timeout=0.5)
+        run.assert_called_once()
+
+    def test_other_failures_are_not_retried(self):
+        failed = self._completed(1, "Cannot connect to the Docker daemon")
+        with patch("production_test_framework.docker.subprocess.run", return_value=failed) as run:
+            assert not force_remove_container("x")
+        run.assert_called_once()

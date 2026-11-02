@@ -8,6 +8,7 @@ Helpers for tests that run part of their work in a container.
 import itertools
 import os
 import subprocess
+import time
 
 from .host import Host
 
@@ -24,6 +25,13 @@ __all__ = [
 #: Label key applied to every container these helpers start, so orphans can be found without
 #: knowing their names. The value is the container name.
 CONTAINER_LABEL = "production-test-framework.container"
+
+#: Seconds between attempts to remove a container that is still dying.
+REMOVE_RETRY_INTERVAL = 2.0
+
+#: What ``docker rm --force`` says when the container is still dying after its kill, or another
+#: removal of it is under way: both clear once it has exited.
+STILL_DYING = ("did not receive an exit event", "is already in progress")
 
 # Distinguishes containers started by the same process; the pid distinguishes processes.
 _sequence = itertools.count()
@@ -65,23 +73,30 @@ def force_remove_container(name: str, *, sudo: bool = False, timeout: float = 30
     the container is on that machine.
 
     Safe to call when the container has already exited under ``--rm``: a missing container
-    counts as success, so this can run unconditionally after every command.
+    counts as success, so this can run unconditionally after every command. A container that
+    takes more than about 10s to die after its kill, such as a large model server releasing its
+    GPUs, makes ``docker rm --force`` give up; that is retried until *timeout*.
     """
     argv = docker_argv("rm", "--force", name, sudo=sudo)
-    try:
-        completed = subprocess.run(
-            host.argv(argv) if host else argv,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-    except OSError, subprocess.SubprocessError:
-        return False
-    if completed.returncode == 0:
-        return True
-    # `docker rm` on an absent container is the expected case after a clean run.
-    return "no such container" in completed.stderr.lower()
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            completed = subprocess.run(
+                host.argv(argv) if host else argv,
+                capture_output=True,
+                text=True,
+                timeout=max(deadline - time.monotonic(), 1.0),
+                check=False,
+            )
+        except OSError, subprocess.SubprocessError:
+            return False
+        # `docker rm` on an absent container is the expected case after a clean run.
+        if completed.returncode == 0 or "no such container" in completed.stderr.lower():
+            return True
+        still_dying = any(message in completed.stderr for message in STILL_DYING)
+        if not still_dying or time.monotonic() + REMOVE_RETRY_INTERVAL >= deadline:
+            return False
+        time.sleep(REMOVE_RETRY_INTERVAL)
 
 
 def list_containers_by_label(label: str = CONTAINER_LABEL, *, sudo: bool = False, timeout: float = 30.0) -> list[str]:
