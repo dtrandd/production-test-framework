@@ -365,6 +365,10 @@ class AgentxWorkload(CommandWorkload):
         (self._run_dir / "benchmark_command.txt").write_text(" ".join(argv) + "\n", encoding="utf-8")
         return argv
 
+    def command_env(self) -> dict[str, str]:
+        # A cached dataset is announced before aiperf's record processor subscribes, which then never scores a record.
+        return {**os.environ, "AIPERF_DATASET_MMAP_CACHE_ENABLED": "false"}
+
     def _save_log(self, result: CommandResult) -> None:
         self._run_dir.mkdir(parents=True, exist_ok=True)
         stderr = f"\n--- stderr ---\n{result.stderr}" if result.stderr else ""

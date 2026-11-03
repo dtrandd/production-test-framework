@@ -110,6 +110,15 @@ class TestAgentxWorkload:
         assert "--ui-type" not in argv
         assert argv[argv.index("--output-artifact-dir") + 1] == str(workload.artifact_dir)
 
+    def test_aiperf_runs_without_its_dataset_cache(self, workload):
+        with patch(
+            "production_test_framework.workload.command_workload.run_cancellable_command",
+            return_value=CommandResult(1, "", "boom"),
+        ) as run:
+            with pytest.raises(RuntimeError):
+                workload._run_command_sync()
+        assert run.call_args.kwargs["env"]["AIPERF_DATASET_MMAP_CACHE_ENABLED"] == "false"
+
     def test_artifact_dir_cannot_be_overridden(self, harness, tmp_path):
         workload = AgentxWorkload(
             harness=harness, aiperf_options={"output_artifact_dir": "/elsewhere"}, run_dir=tmp_path / "run"

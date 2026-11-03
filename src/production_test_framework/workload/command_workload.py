@@ -46,6 +46,10 @@ class CommandWorkload(Workload):
     def build_command(self) -> list[str]:
         """Return the argv (no shell) this workload runs."""
 
+    def command_env(self) -> dict[str, str] | None:
+        """Environment for the command; None runs it with this process's."""
+        return None
+
     def parse_output(self, result: CommandResult) -> Any:
         """Convert a successful command result into the workload result. Override to structure it."""
         return result.stdout or "(no stdout)"
@@ -88,6 +92,7 @@ class CommandWorkload(Workload):
             timeout=self._timeout,
             cancel_event=self._cancel_event,
             poll_interval=self._poll_interval,
+            env=self.command_env(),
         )
         self._command_result = result
         self._safe_cleanup()
