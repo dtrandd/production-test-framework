@@ -132,7 +132,6 @@ class TestFailures:
 
         html = rendered(reporter)
         assert "Failures (5)" in html
-        # Each failure contributes one table row; only two get a <pre> traceback.
         for index in range(5):
             assert f"test_{index}" in html
         assert html.count("pre class='failure'") == 2
@@ -170,8 +169,6 @@ class TestHeader:
         path = tmp_path / "logo.svg"
         path.write_text('<svg viewBox="0 0 10 10"><rect fill="currentColor"/></svg>')
         html = rendered(Reporter(tmp_path / "r.html", logo=load_logo(path)))
-        # Inlined rather than linked, so the report survives being copied anywhere, and on
-        # currentColor so the mark follows the theme.
         assert "<svg" in html
         assert "currentColor" in html
         assert "src=" not in html.split("</header>")[0]
@@ -483,7 +480,6 @@ class TestStatusClasses:
         assert "bad" in self.cell_class(report, "failed")
 
     def test_an_unknown_status_is_left_plain(self, report):
-        # Only the numeric alignment every right-aligned cell carries.
         assert self.cell_class(report, "wobbly") == " class='num'"
 
     def test_a_table_names_its_own_statuses(self, report):
@@ -594,9 +590,7 @@ class TestLatencyFigure:
         import re
 
         svg = latency_percentile_figure(self.FULL)
-        # Each panel divides by its own maximum, so the longest bar of every panel reaches the
-        # same x -- whatever that family's numbers are. (H stops a corner radius short of the
-        # bar's end, which is why this is not the full span.)
+
         per_panel = [
             max(float(m) for m in re.findall(r"M46,[\d.]+ H([\d.]+)", panel))
             for panel in svg.split("<figure class='chart'>")[1:]
@@ -610,7 +604,6 @@ class TestLatencyFigure:
         assert "<title>TTFT mean: 10 ms</title>" in svg
 
     def test_the_figure_reaches_the_report_only_in_html(self, tmp_path):
-        from production_test_framework.reporting.formatting import ReportFormat
 
         for fmt, ext, present in ((ReportFormat.HTML, "html", True), (ReportFormat.MD, "md", False)):
             reporter = Reporter(tmp_path / f"r.{ext}", fmt=fmt)

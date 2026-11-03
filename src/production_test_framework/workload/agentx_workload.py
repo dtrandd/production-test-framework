@@ -35,7 +35,6 @@ __all__ = [
 ]
 
 HARNESS_REPO = "https://github.com/SemiAnalysisAI/agentx-harness.git"
-# agentx-v1.0.6, the release InferenceX's standalone instructions pin.
 HARNESS_REF = "89b21867872a5bbc4b0676bf5005c404da5e9f94"
 
 INFERENCEX_REPO = "https://github.com/SemiAnalysisAI/InferenceX.git"
@@ -45,7 +44,6 @@ INFERENCEX_PACKAGE_ROOT = "inferencex-e2e"
 DEFAULT_AGENTX_HOME = Path("~/.cache/agentx").expanduser()
 
 PYTHON_VERSION = "3.11"
-# Same extra requirement as InferenceX's agentic client: the trace corpora need datasets>=4.7.
 EXTRA_REQUIREMENTS = ("datasets>=4.7.0",)
 
 AGGREGATE_FILE = "profile_export_aiperf.json"
@@ -53,10 +51,6 @@ RESULT_FILENAME = "agentx_result"
 SERVER_LOG_FILENAME = "server.log"
 
 # aiperf draws on a 1600x800 canvas, so its text and markers shrink to nothing at report width.
-# Half the canvas at twice the scale keeps the resolution and doubles their relative size. Its
-# legends sit inside the plot over the data, so they move above it, at the top right. Its
-# time-slice plots label every slice ("0-1", "1-2", ...), which a long run piles into an
-# unreadable band; those keep about MAX_TICKS ticks, each at a slice's start, in seconds.
 PLOT_COMMAND = """
 import math
 import sys
@@ -335,7 +329,6 @@ class AgentxWorkload(CommandWorkload):
         super().__init__(timeout=timeout)
         self._harness = harness
         self._run_dir = Path(run_dir)
-        # The scoring reads aiperf's exports from here, so a caller cannot move them.
         self._options = {**aiperf_options, "output_artifact_dir": str(self.artifact_dir)}
         self._scoring_env = dict(scoring_env or {})
         self._plots = plots
@@ -414,9 +407,6 @@ class AgentxWorkload(CommandWorkload):
 
     def _score(self) -> tuple[dict[str, Any] | None, str]:
         """InferenceX's AgentX aggregate, or ``(None, reason)`` when it could not be built."""
-        # The scoring sums the KV cache capacity each log reports, from RESULT_DIR/server.log or,
-        # for several servers, one RESULT_DIR/watchtower-*.out each. One file per server matters:
-        # within a file it counts each engine once, and every server's engine is "EngineCore".
         logs = [log for log in (self._server_log() if self._server_log else []) if log]
         names = [SERVER_LOG_FILENAME] if len(logs) == 1 else [f"watchtower-{i}.out" for i in range(len(logs))]
         for name, log in zip(names, logs, strict=True):

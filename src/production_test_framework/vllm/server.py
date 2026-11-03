@@ -7,10 +7,8 @@ Start vLLM in docker on a machine for a test, and remove it after.
 A deployment is one server (aggregated), or prefill and decode workers on their own GPUs and
 ports behind :mod:`~.disagg_proxy` on the endpoint's port (disaggregated), which hands each
 request's KV cache from prefill to decode over NIXL. It all runs on a
-:class:`~production_test_framework.host.Host`: this machine, or another one over ssh.
-
-The checks here raise :class:`VllmError` with the reason, before anything is pulled, downloaded
-or started, when the deployment cannot work on the host.
+:class:`~production_test_framework.host.Host`: this machine, or another one over ssh specified
+by --agentx-target.
 """
 
 import json
@@ -66,7 +64,6 @@ REMOVE_TIMEOUT = 120.0
 WORKER_BASE_PORTS = {"prefill": 8100, "decode": 8200}
 NIXL_SIDE_CHANNEL_BASE_PORT = 5600
 
-#: A disaggregated deployment's ``kv_transfer`` to the vLLM KV connector.
 KV_CONNECTORS = {"nixl": "NixlConnector"}
 
 PROXY_SCRIPT = Path(__file__).with_name("disagg_proxy.py")
@@ -363,7 +360,6 @@ class VllmDeployment:
         self.hf_token = hf_token
         self.name = name
         self.startup_timeout = startup_timeout
-        #: The vLLM servers' container names, in the order of *workers*.
         self.worker_containers: list[str] = []
         self.containers: list[str] = []
 

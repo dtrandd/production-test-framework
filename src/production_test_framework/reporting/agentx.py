@@ -55,7 +55,6 @@ LATENCY_UNITS = {
     "full_response_intvty": "tok/s/user",
 }
 
-#: aiperf metric -> the family name :func:`latency_percentile_figure` draws.
 _FIGURE_FAMILIES = {"time_to_first_token": "ttft", "inter_token_latency": "itl", "request_latency": "e2el"}
 _FIGURE_STATS = {"avg": "mean", "p50": "median", "p90": "p90", "p99": "p99"}
 

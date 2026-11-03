@@ -22,10 +22,6 @@ class WorkloadCancelled(Exception):
 class CommandWorkload(Workload):
     """
     Base class for workloads whose work is "run one command, capture its output".
-
-    Subclasses only need to supply :meth:`build_command` (the argv to run) and, optionally,
-    :meth:`parse_output` (turn the raw ``CommandResult`` into a structured result). Status
-    transitions, cancellation, timing, and result plumbing are handled here.
     """
 
     workload_name = "Command"
@@ -38,7 +34,6 @@ class CommandWorkload(Workload):
         max_workers: int = 1,
     ):
         super().__init__(max_workers=max_workers)
-        # Log under the concrete subclass's module rather than this one.
         self.logger = logging.getLogger(type(self).__module__)
         self._timeout = timeout
         self._poll_interval = poll_interval
@@ -72,7 +67,6 @@ class CommandWorkload(Workload):
     def start(self):
         """Start the workload"""
 
-        # We currently only support one run at a time per workload instance.
         if self.status == WorkloadStatus.RUNNING:
             raise RuntimeError(f"{self.workload_name} workload already running")
 

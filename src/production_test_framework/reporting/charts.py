@@ -233,8 +233,7 @@ def scatter_figure(
 
     Each point is ``(x, y, label, current)``; current points are drawn larger and darker and named
     by ``legend[0]``, the rest by ``legend[1]``. Panels with no point are left out, and "" is
-    returned when none remain. *formatter* renders a value given its axis's unit; each point's
-    label shows when it is hovered.
+    returned when none remain.
     """
     drawn = [_scatter_panel(*panel, formatter=formatter) for panel in panels if panel[3]]
     if not drawn:

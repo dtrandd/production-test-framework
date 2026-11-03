@@ -31,7 +31,6 @@ SERVER_POWER_COMMAND = ("sudo", "ipmitool", "dcmi", "power", "reading")
 
 DEFAULT_SAMPLE_INTERVAL = 5.0
 
-#: Shown in place of a reading that needs root when sudo cannot run without a password.
 NEEDS_SUDO = "need sudo privileges"
 
 

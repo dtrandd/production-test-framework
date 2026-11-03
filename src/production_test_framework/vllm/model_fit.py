@@ -48,8 +48,7 @@ WEIGHT_PATTERNS = ("*.safetensors", "*.bin", "*.pt")
 OTHER_PATTERNS = ("*.json", "*.model", "*.txt", "*.jinja", "*.tiktoken")
 
 #: Memory vLLM's own allocations take on each GPU besides weights and KV cache: activations
-#: and buffers, with --enforce-eager. Measured with Qwen3-8B at TP=2 as next to nothing, so
-#: this is margin.
+#: and buffers, with --enforce-eager.
 GPU_OVERHEAD_BYTES = int(0.5 * GIB)
 
 _DTYPE_BYTES = {"float32": 4, "float16": 2, "bfloat16": 2}
@@ -60,11 +59,8 @@ class ModelFootprint:
     """What a model takes: on disk, in GPU memory, and in KV cache per token."""
 
     repo: str
-    #: Every file vLLM downloads, in bytes.
     download_bytes: int
-    #: Of those, the bytes already in the local cache.
     cached_bytes: int
-    #: The weights vLLM loads onto the GPUs: the top-level weight files.
     weight_bytes: int
     config: dict[str, Any]
 
@@ -110,11 +106,7 @@ def _cached_sizes(snapshot: Path | None) -> dict[str, int]:
     """Each complete file in *snapshot*: a snapshot's files link to blobs, missing until downloaded."""
     if snapshot is None:
         return {}
-    return {
-        str(path.relative_to(snapshot)): path.stat().st_size
-        for path in snapshot.rglob("*")
-        if path.is_file()  # follows the link; False while its blob is not there
-    }
+    return {str(path.relative_to(snapshot)): path.stat().st_size for path in snapshot.rglob("*") if path.is_file()}
 
 
 #: Prints the newest snapshot directory under $1, then each complete file in it as "path<TAB>size".

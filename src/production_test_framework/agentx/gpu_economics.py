@@ -4,10 +4,7 @@
 Default power, cost and token-price inputs for inference economics, and the metrics they derive.
 
 Values marked ``InferenceX`` are the per-chip figures https://inferencex.semianalysis.com
-publishes (``/api/v1/views/options`` and its chip pages), as of October 2026: TDP, all-in
-provisioned watts (GPU plus its share of host CPU, NICs and cooling), and $/chip-hour for owning
-at large hyperscaler volume and for renting. Values marked ``estimate`` fill in chips InferenceX
-does not cover and should be overridden when a better figure is known.
+publishes (``/api/v1/views/options`` and its chip pages), as of October 2026.
 
 :func:`fetch_inferencex_gpus` reads InferenceX's current figures and :func:`update_gpu_economics`
 applies them to :data:`GPU_ECONOMICS` for the running process, marking each as fetched that day.
@@ -43,16 +40,12 @@ __all__ = [
     "update_gpu_economics",
 ]
 
-# Calibrated so H100 reproduces InferenceX's 1.37 kW: (700 W + 354 W) x 1.3.
 DEFAULT_HOST_WATTS_PER_GPU = 350.0
-# power_model's air-cooled facility PUE.
+
 DEFAULT_PUE = 1.3
 
-#: The origin of an input probed from the running system, such as server wall power, rather
-#: than configured.
 SYSTEM_QUERY = "system query"
 
-#: ``owning`` is InferenceX's default basis ("H" metrics); ``rental`` is its "R" variant.
 COST_BASES = ("owning", "rental")
 
 
@@ -88,7 +81,6 @@ def _estimated(label: str, vendor: str, tdp_w: float, rental: float, *aliases: s
     )
 
 
-#: Keyed by a normalised name; see :func:`lookup_gpu`.
 GPU_ECONOMICS: dict[str, GpuEconomics] = {
     "h100": GpuEconomics(
         "H100 SXM", "NVIDIA", 700, 1370, 1.17, 2.00, "InferenceX", "InferenceX", ("h100-sxm", "h100-80gb-hbm3")
@@ -160,7 +152,6 @@ class TokenPrice:
     source: str
 
 
-#: By served model name. InferenceX's fleet view defaults output to 4x the input price.
 MODEL_TOKEN_PRICES: dict[str, TokenPrice] = {
     "Qwen/Qwen3-8B": TokenPrice(0.05, 0.20, "estimate: Qwen API list price"),
 }
@@ -217,7 +208,6 @@ def fetch_inferencex_gpus(
     """
     source = f"InferenceX, fetched {dt.date.today().isoformat()}"
     hardware = _get(f"{base_url}/api/v1/views/options", timeout).json()["hardware"]
-    # A chip's page is its key, or its key and system, e.g. gb200-nvl72; -vs- pages compare two.
     pages = sorted(slug for slug in _CHIP_LINK.findall(_get(f"{base_url}/chips", timeout).text) if "-vs-" not in slug)
 
     chips = {}
@@ -234,7 +224,6 @@ def fetch_inferencex_gpus(
             rental_cost_per_hour=cost.get("r"),
             power_source=ESTIMATED_POWER if all_in is None else source,
             cost_source=source,
-            # So a chip added from here is found by its name too, e.g. a profile's sku.
             aliases=tuple({_normalise(chip["label"])} - {key}),
         )
     return chips
@@ -286,9 +275,6 @@ class EconomicsInputs:
     input_price_per_million: float | None
     output_price_per_million: float | None
     sources: Mapping[str, str]
-    #: The values ``all_in_watts_per_gpu`` was computed from -- ``tdp_w``,
-    #: ``host_watts_per_gpu``, ``server_watts``, ``gpus_per_server``, ``pue`` -- each with its
-    #: origin in :attr:`sources`. Empty when the figure was used as given or published.
     power_inputs: Mapping[str, float] = field(default_factory=dict)
 
 

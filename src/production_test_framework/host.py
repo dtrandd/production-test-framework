@@ -22,7 +22,6 @@ from .ssh import CommandResult
 
 __all__ = ["SSH_OPTIONS", "Host"]
 
-#: Fail instead of prompting, and share one connection between the many short commands a run makes.
 SSH_OPTIONS = (
     "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=10",
