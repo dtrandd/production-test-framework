@@ -133,6 +133,11 @@ def agentx_summary_rows(result: AgentxResult) -> list[list[str]]:
             "tok/s/GPU",
         ],
         [
+            "throughput per GPU (input)",
+            _cell(_get(throughput, "per_gpu", "input_tput_tps"), "tok/s/GPU"),
+            "tok/s/GPU",
+        ],
+        [
             "throughput per GPU (output)",
             _cell(_get(throughput, "per_gpu", "output_tput_tps"), "tok/s/GPU"),
             "tok/s/GPU",
@@ -323,14 +328,14 @@ ECONOMICS_AXIS_TITLES = {
     "outputTputPerMw": "Output tput/MW",
     "tokenRevenuePerGpuHour": "Revenue/GPU-hr",
     "tokensPerDollar": "Tokens per $1",
-    "outputTokensPerDollar": "Output tok per $1",
     "inputTokensPerDollar": "Input tok per $1",
+    "outputTokensPerDollar": "Output tok per $1",
     "cost": "Cost/M tokens",
-    "costOutput": "Cost/M output tok",
     "costInput": "Cost/M input tok",
+    "costOutput": "Cost/M output tok",
     "jTotal": "J/token",
-    "jOutput": "J/output token",
     "jInput": "J/input token",
+    "jOutput": "J/output token",
 }
 
 #: InferenceX's default percentile for the x-axis.

@@ -390,14 +390,14 @@ ECONOMICS_METRICS = (
     ("outputTputPerMw", "Output Token Throughput per All in Utility MW", "tok/s/MW"),
     ("tokenRevenuePerGpuHour", "Token Revenue per GPU Hour", "$/GPU/hr"),
     ("tokensPerDollar", "Total Tokens per $1 TCO", "tok/$"),
-    ("outputTokensPerDollar", "Output Tokens per $1 TCO", "tok/$"),
     ("inputTokensPerDollar", "Input Tokens per $1 TCO", "tok/$"),
+    ("outputTokensPerDollar", "Output Tokens per $1 TCO", "tok/$"),
     ("cost", "Cost per Million Total Tokens", "$"),
-    ("costOutput", "Cost per Million Output Tokens", "$"),
     ("costInput", "Cost per Million Input Tokens", "$"),
+    ("costOutput", "Cost per Million Output Tokens", "$"),
     ("jTotal", "All-in Provisioned Joules per Total Token", "J/tok"),
-    ("jOutput", "All-in Provisioned Joules per Output Token", "J/tok"),
     ("jInput", "All-in Provisioned Joules per Input Token", "J/tok"),
+    ("jOutput", "All-in Provisioned Joules per Output Token", "J/tok"),
 )
 
 #: (key, label, unit, path into an AgentX scored aggregate's request_metrics.latency) per x-axis.
@@ -453,12 +453,12 @@ def economics_metrics(
         "outputTputPerMw": _ratio(output_tps_per_gpu, megawatts),
         "tokenRevenuePerGpuHour": revenue,
         "tokensPerDollar": _ratio(per_hour["total"], cost),
-        "outputTokensPerDollar": _ratio(per_hour["output"], cost),
         "inputTokensPerDollar": _ratio(per_hour["input"], cost),
+        "outputTokensPerDollar": _ratio(per_hour["output"], cost),
         "cost": cost_per_million("total"),
-        "costOutput": cost_per_million("output"),
         "costInput": cost_per_million("input"),
+        "costOutput": cost_per_million("output"),
         "jTotal": _ratio(inputs.all_in_watts_per_gpu, total_tps_per_gpu),
-        "jOutput": _ratio(inputs.all_in_watts_per_gpu, output_tps_per_gpu),
         "jInput": _ratio(inputs.all_in_watts_per_gpu, input_tps_per_gpu),
+        "jOutput": _ratio(inputs.all_in_watts_per_gpu, output_tps_per_gpu),
     }
