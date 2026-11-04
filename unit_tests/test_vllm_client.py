@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: FSL-1.1-ALv2
 # Copyright (c) 2025 Delos Data, Inc.
 
-"""Unit tests for vllm module."""
+"""Unit tests for the vLLM inference client."""
 
 from unittest.mock import MagicMock, patch
 
 import requests
 
-from production_test_framework.vllm import (
+from production_test_framework.vllm.client import (
     DEFAULT_MODEL,
     InferenceResult,
     VllmClient,
