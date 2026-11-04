@@ -3,8 +3,10 @@
 """
 Default power, cost and token-price inputs for inference economics, and the metrics they derive.
 
-Values marked ``InferenceX`` are the per-chip figures https://inferencex.semianalysis.com
-publishes (``/api/v1/views/options`` and its chip pages), as of October 2026.
+The per-chip power and cost defaults are in ``gpu_economics.yaml`` beside this module, loaded
+into :data:`GPU_ECONOMICS`. Values marked ``InferenceX`` there are the per-chip figures
+https://inferencex.semianalysis.com publishes (``/api/v1/views/options`` and its chip pages),
+as of October 2026.
 
 :func:`fetch_inferencex_gpus` reads InferenceX's current figures and :func:`update_gpu_economics`
 applies them to :data:`GPU_ECONOMICS` for the running process, marking each as fetched that day.
@@ -16,9 +18,11 @@ import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from importlib.resources import files
 from typing import Any
 
 import requests
+import yaml
 
 __all__ = [
     "COST_BASES",
@@ -26,6 +30,7 @@ __all__ = [
     "DEFAULT_PUE",
     "ECONOMICS_METRICS",
     "GPU_ECONOMICS",
+    "GPU_ECONOMICS_FILE",
     "MODEL_TOKEN_PRICES",
     "SYSTEM_QUERY",
     "X_AXIS_METRICS",
@@ -35,6 +40,7 @@ __all__ = [
     "economics_metrics",
     "estimate_all_in_watts",
     "fetch_inferencex_gpus",
+    "load_gpu_economics",
     "lookup_gpu",
     "resolve_economics",
     "update_gpu_economics",
@@ -72,75 +78,93 @@ class GpuEconomics:
 
 
 ESTIMATED_POWER = "estimate: (TDP + host share) x PUE"
-MARKET_RENTAL = "estimate: market rental, October 2026"
+GPU_ECONOMICS_FILE = "gpu_economics.yaml"
+
+_GPU_FIELDS = {
+    "label": str,
+    "vendor": str,
+    "tdp_w": float,
+    "all_in_w": float,
+    "power_source": str,
+    "owning_cost_per_hour": float,
+    "rental_cost_per_hour": float,
+    "cost_source": str,
+    "aliases": list,
+}
+_REQUIRED_GPU_FIELDS = ("label", "vendor", "tdp_w", "cost_source")
+_COST_FIELDS = ("owning_cost_per_hour", "rental_cost_per_hour")
 
 
-def _estimated(label: str, vendor: str, tdp_w: float, rental: float, *aliases: str) -> GpuEconomics:
+def _normalise(name: str) -> str:
+    text = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    return re.sub(r"^(nvidia|amd)-", "", text)
+
+
+def _gpu_entry(key: Any, entry: Any, source: str) -> GpuEconomics:
+    """One chip of the table, checked; raises ``ValueError`` naming *source*, the chip and the field."""
+    where = f"{source}: {key}"
+    if not isinstance(key, str) or _normalise(key) != key:
+        raise ValueError(f"{where}: a key must be lowercase letters, digits and dashes")
+    if not isinstance(entry, dict):
+        raise ValueError(f"{where}: expected a mapping of fields")
+    if unknown := sorted(set(entry) - set(_GPU_FIELDS)):
+        raise ValueError(f"{where}: unknown field(s) {', '.join(unknown)}")
+    if missing := [name for name in _REQUIRED_GPU_FIELDS if entry.get(name) is None]:
+        raise ValueError(f"{where}: missing {', '.join(missing)}")
+    if ("all_in_w" in entry) != ("power_source" in entry):
+        raise ValueError(f"{where}: all_in_w and power_source go together; leave both out to estimate power")
+    for name, value in entry.items():
+        kind = _GPU_FIELDS[name]
+        if value is None and name in _COST_FIELDS:
+            continue
+        if kind is float:
+            if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
+                raise ValueError(f"{where}: {name} must be a positive number, not {value!r}")
+        elif not isinstance(value, kind) or (kind is str and not value.strip()):
+            raise ValueError(f"{where}: {name} must be a non-empty {kind.__name__}, not {value!r}")
+    aliases = tuple(entry.get("aliases") or ())
+    if bad := [alias for alias in aliases if not isinstance(alias, str) or _normalise(alias) != alias]:
+        raise ValueError(f"{where}: aliases must be lowercase letters, digits and dashes: {bad}")
+    tdp = float(entry["tdp_w"])
+    estimated = "all_in_w" not in entry
     return GpuEconomics(
-        label, vendor, tdp_w, estimate_all_in_watts(tdp_w), None, rental, ESTIMATED_POWER, MARKET_RENTAL, aliases
+        label=entry["label"],
+        vendor=entry["vendor"],
+        tdp_w=tdp,
+        all_in_w=estimate_all_in_watts(tdp) if estimated else float(entry["all_in_w"]),
+        owning_cost_per_hour=entry.get("owning_cost_per_hour"),
+        rental_cost_per_hour=entry.get("rental_cost_per_hour"),
+        power_source=ESTIMATED_POWER if estimated else entry["power_source"],
+        cost_source=entry["cost_source"],
+        aliases=aliases,
     )
 
 
-GPU_ECONOMICS: dict[str, GpuEconomics] = {
-    "h100": GpuEconomics(
-        "H100 SXM", "NVIDIA", 700, 1370, 1.17, 2.00, "InferenceX", "InferenceX", ("h100-sxm", "h100-80gb-hbm3")
-    ),
-    "h200": GpuEconomics("H200 SXM", "NVIDIA", 700, 1370, 1.22, 2.90, "InferenceX", "InferenceX", ("h200-sxm",)),
-    "b200": GpuEconomics("B200", "NVIDIA", 1000, 1710, 1.73, 3.70, "InferenceX", "InferenceX"),
-    "b300": GpuEconomics("B300", "NVIDIA", 1200, 1900, 2.26, 4.25, "InferenceX", "InferenceX"),
-    "gb200": GpuEconomics(
-        "GB200 NVL72", "NVIDIA", 1200, 1870, 1.86, 4.00, "InferenceX", "InferenceX", ("gb200-nvl72",)
-    ),
-    "gb300": GpuEconomics(
-        "GB300 NVL72", "NVIDIA", 1400, 2120, 2.31, 5.00, "InferenceX", "InferenceX", ("gb300-nvl72",)
-    ),
-    "vr200": GpuEconomics(
-        "Vera Rubin NVL72",
-        "NVIDIA",
-        1800,
-        round(1800 * 2120 / 1400),
-        3.61,
-        8.50,
-        "estimate: GB300's all-in/TDP ratio",
-        "InferenceX",
-        ("vera-rubin-nvl72",),
-    ),
-    "mi300x": GpuEconomics("MI300X", "AMD", 750, 1390, 0.95, 1.30, "InferenceX", "InferenceX", ("instinct-mi300x",)),
-    "mi325x": GpuEconomics("MI325X", "AMD", 1000, 1690, 1.10, 1.60, "InferenceX", "InferenceX", ("instinct-mi325x",)),
-    "mi355x": GpuEconomics("MI355X", "AMD", 1400, 2090, 1.50, 2.90, "InferenceX", "InferenceX", ("instinct-mi355x",)),
-    "rtx-pro-6000-blackwell": GpuEconomics(
-        "RTX PRO 6000 Blackwell",
-        "NVIDIA",
-        600,
-        estimate_all_in_watts(600),
-        0.68,
-        0.52,
-        ESTIMATED_POWER,
-        "InferenceX",
-        ("rtx6000pro", "rtx-pro-6000", "rtx-pro-6000-blackwell-server-edition"),
-    ),
-    "jalapeno": GpuEconomics(
-        "Jalapeño", "OpenAI", 700, estimate_all_in_watts(700), 1.27, 1.27, ESTIMATED_POWER, "InferenceX"
-    ),
-    "tpuv7": GpuEconomics(
-        "TPU7x", "Google", 980, estimate_all_in_watts(980), 1.21, 2.00, ESTIMATED_POWER, "InferenceX", ("tpu7x",)
-    ),
-    "a100": _estimated("A100 80GB SXM", "NVIDIA", 400, 1.38, "a100-sxm4-80gb", "a100-80gb"),
-    "l40s": _estimated("L40S", "NVIDIA", 350, 0.97),
-    "l4": _estimated("L4", "NVIDIA", 72, 0.49),
-    "rtx-pro-2000-blackwell": GpuEconomics(
-        "RTX PRO 2000 Blackwell",
-        "NVIDIA",
-        70,
-        estimate_all_in_watts(70),
-        None,
-        0.21,
-        ESTIMATED_POWER,
-        "getdeploying.com: lowest rental (24-month reserved), October 2026",
-        ("rtx-pro-2000",),
-    ),
-    "mi350x": _estimated("MI350X", "AMD", 1000, 3.40, "instinct-mi350x"),
-}
+def load_gpu_economics(text: str | None = None, source: str = GPU_ECONOMICS_FILE) -> dict[str, GpuEconomics]:
+    """
+    The per-chip table from *text*, or from :data:`GPU_ECONOMICS_FILE` shipped with this module.
+
+    Raises ``ValueError`` naming the chip and field of the first entry that is wrong.
+    """
+    if text is None:
+        text = files(__package__).joinpath(GPU_ECONOMICS_FILE).read_text(encoding="utf-8")
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"{source}: not valid YAML: {exc}") from exc
+    if not isinstance(data, dict) or not data:
+        raise ValueError(f"{source}: expected a mapping of chips")
+    table = {key: _gpu_entry(key, entry, source) for key, entry in data.items()}
+    seen: dict[str, str] = {}
+    for key, gpu in table.items():
+        for name in (key, *gpu.aliases):
+            if name in seen:
+                raise ValueError(f"{source}: {key}: {name!r} already names {seen[name]}")
+            seen[name] = key
+    return table
+
+
+GPU_ECONOMICS: dict[str, GpuEconomics] = load_gpu_economics()
 
 
 @dataclass(frozen=True)
@@ -168,11 +192,6 @@ MODEL_TOKEN_PRICES: dict[str, TokenPrice] = {
     "openai/gpt-oss-120b": TokenPrice(0.09, 0.45, HOSTED_ESTIMATE),
     "openai/gpt-oss-20b": TokenPrice(0.05, 0.20, HOSTED_ESTIMATE),
 }
-
-
-def _normalise(name: str) -> str:
-    text = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-    return re.sub(r"^(nvidia|amd)-", "", text)
 
 
 def lookup_gpu(name: str | None) -> tuple[str, GpuEconomics] | None:

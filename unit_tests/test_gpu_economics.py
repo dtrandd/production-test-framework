@@ -16,6 +16,7 @@ from production_test_framework.agentx.gpu_economics import (
     economics_metrics,
     estimate_all_in_watts,
     fetch_inferencex_gpus,
+    load_gpu_economics,
     lookup_gpu,
     resolve_economics,
     update_gpu_economics,
@@ -47,6 +48,39 @@ class TestLookupGpu:
     def test_every_entry_has_a_positive_tdp_and_all_in_above_it(self):
         for gpu in GPU_ECONOMICS.values():
             assert 0 < gpu.tdp_w < gpu.all_in_w
+
+
+class TestLoadGpuEconomics:
+    CHIP = "x1:\n  label: X1\n  vendor: Acme\n  tdp_w: 500\n  rental_cost_per_hour: 1.5\n  cost_source: test\n"
+
+    def test_the_shipped_table_loads(self):
+        assert load_gpu_economics() == GPU_ECONOMICS
+        assert "rtx-pro-2000-blackwell" in GPU_ECONOMICS
+
+    def test_a_chip_without_all_in_power_is_estimated(self):
+        chip = load_gpu_economics(self.CHIP)["x1"]
+        assert chip.all_in_w == estimate_all_in_watts(500)
+        assert chip.power_source == gpu_economics.ESTIMATED_POWER
+        assert chip.owning_cost_per_hour is None
+
+    @pytest.mark.parametrize(
+        ("old", "new", "message"),
+        [
+            ("tdp_w: 500", "tdp_w: -5", "x1: tdp_w must be a positive number"),
+            ("cost_source: test\n", "", "x1: missing cost_source"),
+            ("tdp_w: 500", "tdp_w: 500\n  all_in_w: 900", "x1: all_in_w and power_source go together"),
+            ("tdp_w: 500", "tdp_w: 500\n  wattage: 900", r"x1: unknown field\(s\) wattage"),
+            ("tdp_w: 500", "tdp_w: 500\n  aliases: [X 1]", "x1: aliases must be lowercase"),
+        ],
+    )
+    def test_a_bad_entry_names_the_chip_and_field(self, old, new, message):
+        with pytest.raises(ValueError, match=f"gpu_economics.yaml: {message}"):
+            load_gpu_economics(self.CHIP.replace(old, new, 1))
+
+    def test_a_name_used_by_two_chips_is_refused(self):
+        text = self.CHIP.replace("x1:", "x0:") + self.CHIP + "  aliases: [x0]\n"
+        with pytest.raises(ValueError, match="x1: 'x0' already names x0"):
+            load_gpu_economics(text)
 
 
 class TestAllInEstimate:
