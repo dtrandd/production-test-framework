@@ -5,8 +5,8 @@
 Start vLLM in docker on a machine for a test, and remove it after.
 
 A deployment is one server (aggregated), or prefill and decode workers on their own GPUs and
-ports behind :mod:`~.disagg_proxy` on the endpoint's port (disaggregated), which hands each
-request's KV cache from prefill to decode over NIXL. It all runs on a
+ports behind vLLM Router (https://github.com/vllm-project/router) on the endpoint's port
+(disaggregated), which hands each request's KV cache from prefill to decode over NIXL. It all runs on a
 :class:`~production_test_framework.host.Host`: this machine, or another one over ssh specified
 by --agentx-target.
 """
@@ -31,6 +31,7 @@ from .model_fit import disk_shortfall, gpu_shortfall, model_footprint, rope_over
 __all__ = [
     "GPU_VENDORS",
     "KV_CONNECTORS",
+    "ROUTER_IMAGE",
     "VLLM_IMAGE",
     "GpuVendor",
     "Pool",
@@ -66,8 +67,11 @@ NIXL_SIDE_CHANNEL_BASE_PORT = 5600
 
 KV_CONNECTORS = {"nixl": "NixlConnector"}
 
-PROXY_SCRIPT = Path(__file__).with_name("disagg_proxy.py")
-REMOTE_PROXY_SCRIPT = ".cache/production-test-framework/disagg_proxy.py"
+ROUTER_IMAGE = "vllm/vllm-router:v0.1.17"
+#: Workers in each pool taken in turn, and no retries or circuit breaking, so a run measures the
+#: workers rather than the routing and every failed request counts.
+ROUTER_POLICY = "round_robin"
+ROUTER_REQUEST_TIMEOUT = 7200
 
 NVIDIA_HINT = (
     "Check on the target that: nvidia-smi lists the GPUs (the NVIDIA driver is installed and loaded); "
@@ -119,7 +123,7 @@ class VllmWorker:
 
     @property
     def local_url(self) -> str:
-        """The worker's URL from its own host, as the proxy beside it reaches it."""
+        """The worker's URL from its own host, as the router beside it reaches it."""
         return f"http://localhost:{self.port}"
 
 
@@ -324,7 +328,7 @@ def check_model_fits(
 class VllmDeployment:
     """
     vLLM containers on *host* serving *model* at *url*: *workers* from :func:`aggregated_workers`
-    or :func:`disaggregated_workers`, the latter behind the proxy on *url*'s port. *args* are the
+    or :func:`disaggregated_workers`, the latter behind vLLM Router on *url*'s port. *args* are the
     ``vllm serve`` flags beyond model, port and tensor parallelism, as ``{flag_name: value}``; a
     mapping goes as JSON. Containers are named after *name* and their logs saved to *log_dir*.
 
@@ -343,6 +347,7 @@ class VllmDeployment:
         args: dict[str, Any] | None = None,
         kv_transfer: str = "nixl",
         image: str = VLLM_IMAGE,
+        router_image: str = ROUTER_IMAGE,
         cache: str | None = None,
         hf_token: str | None = None,
         name: str = "vllm",
@@ -356,6 +361,7 @@ class VllmDeployment:
         self.args = args or {}
         self.kv_transfer = kv_transfer
         self.image = image
+        self.router_image = router_image
         self.cache = cache or hf_cache(host)
         self.hf_token = hf_token
         self.name = name
@@ -407,21 +413,26 @@ class VllmDeployment:
                 flags += ["--env", f"VLLM_NIXL_SIDE_CHANNEL_PORT={worker.side_channel_port}"]
             name = unique_container_name(self.name if worker.role == "server" else f"{self.name}-{worker.role}")
             self.worker_containers.append(name)
-            self._run_container(name, flags, shlex.join(argv))
+            self._run_container(name, flags, self.image, [shlex.join(argv)])
         for name, worker in zip(self.worker_containers, self.workers, strict=True):
             self._wait_until_serving(name, worker.url)
 
         if self.disaggregated:
-            proxy = unique_container_name(f"{self.name}-proxy")
-            command = shlex.join([
-                "python3", "/disagg_proxy.py",
+            check_image_fits(self.host, self.router_image)
+            router = unique_container_name(f"{self.name}-router")
+            command = [
+                "vllm-router", "--vllm-pd-disaggregation",
+                *(arg for w in self.workers if w.role == "prefill" for arg in ("--prefill", w.local_url)),
+                *(arg for w in self.workers if w.role == "decode" for arg in ("--decode", w.local_url)),
+                "--host", "0.0.0.0",
                 "--port", str(port),
-                "--prefill", *(worker.local_url for worker in self.workers if worker.role == "prefill"),
-                "--decode", *(worker.local_url for worker in self.workers if worker.role == "decode"),
-            ])  # fmt: skip
-            script = self._proxy_script()
-            self._run_container(proxy, ["--network", "host", "--volume", f"{script}:/disagg_proxy.py:ro"], command)
-            self._wait_until_serving(proxy, self.url)
+                "--policy", ROUTER_POLICY,
+                "--request-timeout-secs", str(ROUTER_REQUEST_TIMEOUT),
+                "--disable-retries",
+                "--disable-circuit-breaker",
+            ]  # fmt: skip
+            self._run_container(router, ["--network", "host"], self.router_image, command)
+            self._wait_until_serving(router, self.url)
 
     def worker_logs(self) -> list[str]:
         """Each vLLM server's log so far, in the order of *workers*."""
@@ -438,9 +449,9 @@ class VllmDeployment:
         self.containers.clear()
         self.worker_containers.clear()
 
-    def _run_container(self, name: str, flags: list[str], command: str) -> None:
-        run = docker_argv("run", "--detach", *flags, "--name", name, *label_args(name), self.image, command)
-        _log.info("Starting %s as %s on %s: %s", self.image, name, _where(self.host), command)
+    def _run_container(self, name: str, flags: list[str], image: str, command: list[str]) -> None:
+        run = docker_argv("run", "--detach", *flags, "--name", name, *label_args(name), image, *command)
+        _log.info("Starting %s as %s on %s: %s", image, name, _where(self.host), " ".join(command))
         self.containers.append(name)
         if self.hf_token:
             started = self.host.shell(
@@ -487,12 +498,3 @@ class VllmDeployment:
         log = self._save_log(name)
         tail = "\n".join(log.read_text(encoding="utf-8").splitlines()[-20:])
         raise VllmError(f"{name} {state}; its log is {log}:\n{tail}")
-
-    def _proxy_script(self) -> str:
-        """The proxy's path on the host: the packaged copy here, else one written to its home directory."""
-        if self.host.local:
-            return str(PROXY_SCRIPT)
-        path = f"{self.host.home}/{REMOTE_PROXY_SCRIPT}"
-        if not (written := self.host.write_file(path, PROXY_SCRIPT.read_text(encoding="utf-8"))).success:
-            raise VllmError(f"could not copy {PROXY_SCRIPT.name} to {self.host}:{path}: {written.stderr}")
-        return path

@@ -128,16 +128,20 @@ class TestDeployment:
         assert run[-1] == "vllm serve acme/model --port 8080 --tensor-parallel-size 2 --max-model-len 65536"
         assert deployment.worker_containers == deployment.containers
 
-    def test_disaggregated_starts_the_proxy_after_the_workers(self, tmp_path):
+    def test_disaggregated_starts_the_router_after_the_workers(self, tmp_path):
         host = FakeHost(local=False)
         workers = disaggregated_workers(Pool(), Pool())
         deployment = _deployment(host, workers, log_dir=tmp_path, name="agentx")
         deployment.start()
-        prefill, decode, proxy = host.docker_runs()
+        prefill, decode, router = host.docker_runs()
         assert "--kv-transfer-config" in prefill[-1] and "VLLM_NIXL_SIDE_CHANNEL_PORT=5601" in decode
-        assert proxy[-1].startswith("python3 /disagg_proxy.py --port 8080 --prefill http://localhost:8100")
-        assert "/home/alice/.cache/production-test-framework/disagg_proxy.py" in host.written
-        assert len(deployment.worker_containers) == 2 and deployment.containers[-1].startswith("agentx-proxy-")
+        command = router[router.index(server.ROUTER_IMAGE) + 1 :]
+        assert command[:2] == ["vllm-router", "--vllm-pd-disaggregation"]
+        assert command[2:6] == ["--prefill", "http://localhost:8100", "--decode", "http://localhost:8200"]
+        assert command[command.index("--port") + 1] == "8080"
+        assert command[command.index("--policy") + 1] == "round_robin"
+        assert "--disable-retries" in command and "--disable-circuit-breaker" in command
+        assert len(deployment.worker_containers) == 2 and deployment.containers[-1].startswith("agentx-router-")
 
     def test_hf_token_goes_on_stdin(self, tmp_path):
         host = FakeHost()
