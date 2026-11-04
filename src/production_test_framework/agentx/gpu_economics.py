@@ -152,8 +152,21 @@ class TokenPrice:
     source: str
 
 
+INFERENCEX_LIST_PRICE = "InferenceX list price"
+HOSTED_ESTIMATE = "estimate: hosted API rates"
+
 MODEL_TOKEN_PRICES: dict[str, TokenPrice] = {
+    "deepseek-ai/DeepSeek-V4-Pro": TokenPrice(1.32, 3.96, f"{INFERENCEX_LIST_PRICE} (DeepSeek)"),
+    "deepseek-ai/DeepSeek-V4.1-Flash": TokenPrice(0.30, 1.20, f"{INFERENCEX_LIST_PRICE} (DeepSeek)"),
+    "moonshotai/Kimi-K3": TokenPrice(3.00, 15.00, f"{INFERENCEX_LIST_PRICE} (Moonshot)"),
+    "zai-org/GLM-5.2": TokenPrice(1.40, 4.40, f"{INFERENCEX_LIST_PRICE} (Z.ai)"),
+    "MiniMaxAI/MiniMax-M3": TokenPrice(0.30, 1.20, f"{INFERENCEX_LIST_PRICE} (MiniMax)"),
+    "Qwen/Qwen3.8-27B": TokenPrice(0.50, 3.00, "estimate: Alibaba Cloud list price"),
     "Qwen/Qwen3-8B": TokenPrice(0.05, 0.20, "estimate: Qwen API list price"),
+    "Qwen/Qwen3-0.6B": TokenPrice(0.10, 0.10, HOSTED_ESTIMATE),
+    "meta-llama/Llama-3.1-8B": TokenPrice(0.03, 0.05, HOSTED_ESTIMATE),
+    "openai/gpt-oss-120b": TokenPrice(0.09, 0.45, HOSTED_ESTIMATE),
+    "openai/gpt-oss-20b": TokenPrice(0.05, 0.20, HOSTED_ESTIMATE),
 }
 
 
