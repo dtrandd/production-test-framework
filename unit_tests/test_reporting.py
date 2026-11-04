@@ -173,6 +173,11 @@ class TestHeader:
         assert "currentColor" in html
         assert "src=" not in html.split("</header>")[0]
 
+    def test_the_stylesheet_is_inlined(self, tmp_path):
+        html = rendered(Reporter(tmp_path / "r.html"))
+        assert "<style>" in html and "header.masthead" in html
+        assert "<link" not in html
+
     def test_an_empty_logo_renders_no_image(self, tmp_path):
         html = rendered(Reporter(tmp_path / "r.html", logo=Logo("")))
         assert "class='logo'" not in html
