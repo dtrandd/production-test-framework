@@ -8,9 +8,11 @@ Provides high-level interfaces for interacting with Kubernetes clusters,
 with support for both local kubectl and remote k3s kubectl via SSH.
 """
 
+import base64
 import json
 import logging
 import os
+import re
 import shlex
 import socket
 import subprocess
@@ -104,6 +106,16 @@ class Pod:
             return False
         ready, total = self.ready.split("/")
         return ready == total and int(ready) > 0
+
+
+def _pod_field(pod: dict, path: str) -> str | None:
+    """Value of a downward API fieldPath on a pod object, or None when the pod does not have it."""
+    if match := re.fullmatch(r"metadata\.(labels|annotations)\['(.+)'\]", path):
+        return pod["metadata"].get(match[1], {}).get(match[2])
+    value = pod
+    for key in path.split("."):
+        value = value.get(key) if isinstance(value, dict) else None
+    return value if isinstance(value, str) else None
 
 
 class KubernetesClient:
@@ -348,6 +360,51 @@ class KubernetesClient:
                 continue
             name, containers = entry.split("=", 1)
             pods[name] = set(containers.split())
+        return pods, result
+
+    def pod_env(self, namespace: str, selector: str) -> tuple[dict[str, dict[str, str]], CommandResult]:
+        """
+        Get the environment of every pod matching a label selector, as {pod: {variable: value}}.
+
+        Literal values, fieldRef and secretKeyRef references are resolved and merged across the
+        pod's containers; other valueFrom sources and envFrom are left out, as is a fieldRef the
+        pod does not have yet (e.g. status.hostIP before scheduling). A missing optional Secret
+        key is left out, as the kubelet does; any other unresolvable reference fails the call.
+        """
+        listing, result = self._get_json(f"get pods -n {namespace} -l {selector} -o json")
+        if listing is None:
+            return {}, result
+
+        secrets: dict[str, dict[str, str]] = {}
+        pods: dict[str, dict[str, str]] = {}
+        for pod in listing.get("items", []):
+            name = pod["metadata"]["name"]
+            env: dict[str, str] = {}
+            for container in pod["spec"]["containers"]:
+                for entry in container.get("env", []):
+                    ref = entry.get("valueFrom", {}).get("secretKeyRef")
+                    field = entry.get("valueFrom", {}).get("fieldRef")
+                    if "valueFrom" not in entry:
+                        env[entry["name"]] = entry.get("value", "")
+                    elif field:
+                        value = _pod_field(pod, field["fieldPath"])
+                        if value is not None:
+                            env[entry["name"]] = value
+                    elif ref:
+                        if ref["name"] not in secrets:
+                            secret, _ = self.get_secret(ref["name"], namespace)
+                            secrets[ref["name"]] = secret.get("data", {})
+                        value = secrets[ref["name"]].get(ref["key"])
+                        if value is not None:
+                            env[entry["name"]] = base64.b64decode(value).decode()
+                        elif not ref.get("optional"):
+                            return {}, CommandResult(
+                                returncode=-1,
+                                stdout="",
+                                stderr=f"pod {name}: {entry['name']} needs key {ref['key']!r} of Secret "
+                                f"{ref['name']!r} in {namespace}, which could not be read",
+                            )
+            pods[name] = env
         return pods, result
 
     def pod_metrics(self, namespace: str, pod: str, port: int) -> tuple[str, CommandResult]:

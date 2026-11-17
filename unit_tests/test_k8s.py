@@ -3,6 +3,7 @@
 
 """Unit tests for k8s module."""
 
+import base64
 import json
 import shlex
 from datetime import UTC, datetime, timedelta
@@ -394,6 +395,90 @@ class TestKubernetesClient:
         secret, result = k8s_client.get_secret("x", "mc")
         assert secret == {}
         assert result.stderr == 'secrets "x" not found'
+
+    @staticmethod
+    def _pods(*envs: list[dict]) -> CommandResult:
+        items = [
+            {"metadata": {"name": f"pod-{i}"}, "spec": {"containers": [{"name": "c", "env": env}]}}
+            for i, env in enumerate(envs)
+        ]
+        return CommandResult(returncode=0, stdout=json.dumps({"items": items}), stderr="")
+
+    @staticmethod
+    def _secret(**data: str) -> CommandResult:
+        encoded = {key: base64.b64encode(value.encode()).decode() for key, value in data.items()}
+        return CommandResult(returncode=0, stdout=json.dumps({"data": encoded}), stderr="")
+
+    def test_pod_env_resolves_values_and_secrets(self, k8s_client, mock_ssh):
+        secret_ref = {"secretKeyRef": {"name": "auth", "key": "password"}}
+        mock_ssh.run_kubectl.side_effect = [
+            self._pods(
+                [{"name": "MODE", "value": "nic"}, {"name": "PASSWORD", "valueFrom": secret_ref}],
+                [{"name": "EMPTY"}, {"name": "PASSWORD", "valueFrom": secret_ref}],
+            ),
+            self._secret(password="hunter2"),
+        ]
+
+        pods, result = k8s_client.pod_env("ns", "app=x")
+
+        assert result.success
+        assert pods == {
+            "pod-0": {"MODE": "nic", "PASSWORD": "hunter2"},
+            "pod-1": {"EMPTY": "", "PASSWORD": "hunter2"},
+        }
+        assert mock_ssh.run_kubectl.call_args_list[0][0][0] == "get pods -n ns -l app=x -o json"
+        assert mock_ssh.run_kubectl.call_count == 2, "the Secret should be read once"
+
+    def test_pod_env_resolves_field_refs(self, k8s_client, mock_ssh):
+        listing = self._pods(
+            [
+                {"name": "HOST", "valueFrom": {"fieldRef": {"fieldPath": "status.hostIP"}}},
+                {"name": "POD", "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}}},
+                {"name": "APP", "valueFrom": {"fieldRef": {"fieldPath": "metadata.labels['app']"}}},
+                {"name": "NODE", "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}},
+            ]
+        )
+        items = json.loads(listing.stdout)
+        items["items"][0]["metadata"]["labels"] = {"app": "x"}
+        items["items"][0]["status"] = {"hostIP": "192.0.2.5"}
+        mock_ssh.run_kubectl.return_value = CommandResult(returncode=0, stdout=json.dumps(items), stderr="")
+
+        pods, result = k8s_client.pod_env("ns", "app=x")
+
+        assert result.success
+        assert pods == {"pod-0": {"HOST": "192.0.2.5", "POD": "pod-0", "APP": "x"}}, "an unscheduled pod has no node"
+
+    def test_pod_env_skips_other_sources(self, k8s_client, mock_ssh):
+        resource_ref = {"resourceFieldRef": {"resource": "limits.cpu"}}
+        config_ref = {"configMapKeyRef": {"name": "cfg", "key": "mode"}}
+        mock_ssh.run_kubectl.return_value = self._pods(
+            [{"name": "CPU", "valueFrom": resource_ref}, {"name": "MODE", "valueFrom": config_ref}]
+        )
+        pods, _ = k8s_client.pod_env("ns", "app=x")
+        assert pods == {"pod-0": {}}
+
+    def test_pod_env_leaves_out_missing_optional_key(self, k8s_client, mock_ssh):
+        ref = {"secretKeyRef": {"name": "auth", "key": "password", "optional": True}}
+        mock_ssh.run_kubectl.side_effect = [
+            self._pods([{"name": "PASSWORD", "valueFrom": ref}]),
+            CommandResult(returncode=1, stdout="", stderr='secrets "auth" not found'),
+        ]
+        pods, result = k8s_client.pod_env("ns", "app=x")
+        assert result.success
+        assert pods == {"pod-0": {}}
+
+    def test_pod_env_fails_on_missing_required_key(self, k8s_client, mock_ssh):
+        ref = {"secretKeyRef": {"name": "auth", "key": "password"}}
+        mock_ssh.run_kubectl.side_effect = [self._pods([{"name": "PASSWORD", "valueFrom": ref}]), self._secret()]
+        pods, result = k8s_client.pod_env("ns", "app=x")
+        assert pods == {}
+        assert not result.success
+        assert "'password'" in result.stderr and "'auth'" in result.stderr
+
+    def test_pod_env_passes_kubectl_failure_through(self, k8s_client, mock_ssh):
+        failure = CommandResult(returncode=1, stdout="", stderr="forbidden")
+        mock_ssh.run_kubectl.return_value = failure
+        assert k8s_client.pod_env("ns", "app=x") == ({}, failure)
 
 
 class TestKubernetesClientLocalKubeconfig:
