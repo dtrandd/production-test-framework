@@ -16,10 +16,14 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable, Mapping
+from typing import TYPE_CHECKING
 
 import requests
 
 from production_test_framework.ssh import CommandResult
+
+if TYPE_CHECKING:
+    from production_test_framework.host import Host
 
 logger = logging.getLogger(__name__)
 
@@ -234,7 +238,13 @@ def fitted_rise(samples: list[float], *, settle: int = 0) -> tuple[float, float,
     return start, end, end / start - 1.0 if start > 0 else 0.0
 
 
-def check_tcp_connectivity(host: str, port: int, timeout: float = 5.0) -> bool:
+def check_tcp_connectivity(
+    host: str,
+    port: int,
+    timeout: float = 5.0,
+    source: Host | None = None,
+    source_address: str | None = None,
+) -> bool:
     """
     Test TCP connectivity to a host:port.
 
@@ -242,16 +252,25 @@ def check_tcp_connectivity(host: str, port: int, timeout: float = 5.0) -> bool:
         host: Target hostname or IP
         port: Target port
         timeout: Connection timeout in seconds
+        source: Host to connect from, with `nc -z`. If None, connects from here.
+        source_address: Local address to connect from. If None, the kernel picks one.
 
     Returns:
         True if connection successful, False otherwise
     """
+    if source is not None:
+        wait = str(max(1, int(timeout)))
+        bind = ["-s", source_address] if source_address else []
+        return source.run(["nc", "-z", "-w", wait, *bind, host, str(port)], timeout=int(timeout) + 10).success
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(timeout)
-        result = sock.connect_ex((host, port))
-        sock.close()
-        return result == 0
+        try:
+            sock.settimeout(timeout)
+            if source_address:
+                sock.bind((source_address, 0))
+            return sock.connect_ex((host, port)) == 0
+        finally:
+            sock.close()
     except OSError:
         return False
 
@@ -300,12 +319,19 @@ def wait_for_http_ok(
     return False, last_error
 
 
-def ping(host: str, count: int = 1, timeout: float = 2.0, interface: str | None = None) -> bool:
+def ping(
+    host: str,
+    count: int = 1,
+    timeout: float = 2.0,
+    interface: str | None = None,
+    source: Host | None = None,
+    pattern: str | None = None,
+) -> bool:
     """
     Return True if the host answers an ICMP echo request.
 
-    Uses the system `ping` (Linux flags). Runs locally via subprocess, so the
-    host must be reachable from wherever this runs.
+    Uses the system `ping` (Linux flags). Runs locally via subprocess, or on
+    *source* when given, so the host must be reachable from there.
 
     Args:
         host: Target hostname or IP.
@@ -313,6 +339,8 @@ def ping(host: str, count: int = 1, timeout: float = 2.0, interface: str | None 
         timeout: Per-reply wait in seconds.
         interface: Source interface (or address) to ping from, passed as
             `ping -I`. If None, the OS chooses the outgoing interface.
+        source: Host to ping from. If None, pings from this machine.
+        pattern: Hex bytes to fill the payload with, passed as `ping -p`.
 
     Returns:
         True if at least one reply was received.
@@ -321,7 +349,11 @@ def ping(host: str, count: int = 1, timeout: float = 2.0, interface: str | None 
     cmd = ["ping", "-c", str(count), "-W", str(per_reply)]
     if interface:
         cmd += ["-I", interface]
+    if pattern:
+        cmd += ["-p", pattern]
     cmd.append(host)
+    if source is not None:
+        return source.run(cmd, timeout=count * per_reply + 15).success
     return run_command(cmd, timeout=count * per_reply + 5).success
 
 

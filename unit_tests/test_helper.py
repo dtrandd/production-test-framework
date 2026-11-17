@@ -173,6 +173,15 @@ class TestCheckTcpConnectivity:
 
             assert result is False
 
+    def test_closes_the_socket_when_the_bind_fails(self):
+        with patch("production_test_framework.helper.socket.socket") as mock_socket_cls:
+            mock_sock = MagicMock()
+            mock_socket_cls.return_value = mock_sock
+            mock_sock.bind.side_effect = OSError("cannot assign requested address")
+
+            assert check_tcp_connectivity("localhost", 80, source_address="10.0.0.9") is False
+            mock_sock.close.assert_called_once()
+
     def test_uses_custom_timeout(self):
         with patch("production_test_framework.helper.socket.socket") as mock_socket_cls:
             mock_sock = MagicMock()
@@ -347,6 +356,48 @@ class TestPing:
         assert ping("10.0.0.1") is True
         cmd = mock_run.call_args.args[0]
         assert "-I" not in cmd
+
+    @patch("production_test_framework.helper.run_command")
+    def test_runs_on_the_source_host(self, mock_run):
+        source = MagicMock()
+        source.run.return_value = CommandResult(returncode=0, stdout="", stderr="")
+
+        assert ping("10.0.0.1", interface="eth1", source=source) is True
+        mock_run.assert_not_called()
+        cmd = source.run.call_args.args[0]
+        assert cmd[0] == "ping" and cmd[cmd.index("-I") + 1] == "eth1" and cmd[-1] == "10.0.0.1"
+
+    @patch("production_test_framework.helper.run_command")
+    def test_passes_the_payload_pattern(self, mock_run):
+        mock_run.return_value = CommandResult(returncode=0, stdout="", stderr="")
+
+        ping("10.0.0.1", pattern="c0ffee")
+        cmd = mock_run.call_args.args[0]
+        assert cmd[cmd.index("-p") + 1] == "c0ffee"
+
+
+class TestCheckTcpConnectivityFromAHost:
+    """Tests for check_tcp_connectivity run on another host."""
+
+    def test_uses_nc_on_the_source_host(self):
+        source = MagicMock()
+        source.run.return_value = CommandResult(returncode=0, stdout="", stderr="")
+
+        assert check_tcp_connectivity("10.0.0.2", 22, timeout=2, source=source) is True
+        assert source.run.call_args.args[0] == ["nc", "-z", "-w", "2", "10.0.0.2", "22"]
+
+    def test_connects_from_the_source_address(self):
+        source = MagicMock()
+        source.run.return_value = CommandResult(returncode=1, stdout="", stderr="")
+
+        assert check_tcp_connectivity("10.0.0.2", 22, timeout=2, source=source, source_address="10.0.0.9") is False
+        assert source.run.call_args.args[0] == ["nc", "-z", "-w", "2", "-s", "10.0.0.9", "10.0.0.2", "22"]
+
+    def test_refused_is_false(self):
+        source = MagicMock()
+        source.run.return_value = CommandResult(returncode=1, stdout="", stderr="")
+
+        assert check_tcp_connectivity("10.0.0.2", 22, source=source) is False
 
 
 class TestWaitForPing:

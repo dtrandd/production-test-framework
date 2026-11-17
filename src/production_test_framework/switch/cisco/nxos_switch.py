@@ -50,8 +50,7 @@ from production_test_framework.switch.network_switch import (
 )
 from production_test_framework.switch.port_sort import cisco_port_id_sort_key
 from production_test_framework.switch.portname import PortNameResolver, parse_cisco
-
-requests.packages.urllib3.disable_warnings(requests.packages.urllib3.exceptions.InsecureRequestWarning)
+from production_test_framework.switch.tls import unverified_tls_quiet
 
 _TIMEOUT_S = 60
 
@@ -211,14 +210,15 @@ class CiscoNxosSwitch(NetworkSwitch):
         payload = {"jsonrpc": "2.0", "method": method, "params": {"cmd": command, "version": 1}, "id": 1}
         self._logger.debug(f"NX-API: {command}")
         try:
-            response = self._session.post(
-                self._url,
-                json=payload,
-                headers={"Content-Type": "application/json-rpc"},
-                auth=HTTPBasicAuth(self._config.username, self._config.password),
-                verify=self._config.verify_tls,
-                timeout=_TIMEOUT_S,
-            )
+            with unverified_tls_quiet(self._config.verify_tls):
+                response = self._session.post(
+                    self._url,
+                    json=payload,
+                    headers={"Content-Type": "application/json-rpc"},
+                    auth=HTTPBasicAuth(self._config.username, self._config.password),
+                    verify=self._config.verify_tls,
+                    timeout=_TIMEOUT_S,
+                )
         except requests.RequestException as exc:
             raise SwitchAPIError(f"NX-API request failed: {command}: {exc}") from exc
         try:
