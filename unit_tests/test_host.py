@@ -37,6 +37,18 @@ class TestArgv:
         assert "BatchMode=yes" in argv
         assert argv[-2:] == ["gpu-node", "docker run --gpus '\"device=0,1\"' image"]
 
+    def test_adds_ssh_options_before_the_address(self):
+        argv = Host("alice@node", ssh_options=["IdentityFile=/tmp/k", "StrictHostKeyChecking=accept-new"]).argv(
+            ["true"]
+        )
+        tail = argv[1 + len(SSH_OPTIONS) :]
+        assert tail == ["-o", "IdentityFile=/tmp/k", "-o", "StrictHostKeyChecking=accept-new", "alice@node", "true"]
+
+    def test_own_connection_skips_multiplexing(self):
+        argv = Host("alice@node").argv(["tcpdump"], shared_connection=False)
+        assert "ControlPath=none" in argv and "ControlMaster=auto" not in argv
+        assert "BatchMode=yes" in argv and argv[-2:] == ["alice@node", "tcpdump"]
+
     def test_shell_passes_arguments_positionally(self):
         with _patched(CommandResult(0, "", "")) as run:
             Host().shell('echo "$1"', "a b")

@@ -48,8 +48,7 @@ from production_test_framework.switch.nvidia.nvue_paths import (
 )
 from production_test_framework.switch.port_sort import port_id_sort_key
 from production_test_framework.switch.portname import PortNameResolver
-
-requests.packages.urllib3.disable_warnings(requests.packages.urllib3.exceptions.InsecureRequestWarning)
+from production_test_framework.switch.tls import unverified_tls_quiet
 
 # OpenAPI getInterfaces view=description: admin-status, oper-status, description
 VIEW_DESCRIPTION = "description"
@@ -392,13 +391,14 @@ class NvidiaCumulusSwitch(NetworkSwitch):
         request_params = dict(params) if params else None
 
         self._logger.debug(f"NVUE GET {path} params={request_params}")
-        response = self._session.get(
-            url,
-            auth=basic,
-            params=request_params,
-            verify=self._config.verify_tls,
-            timeout=30,
-        )
+        with unverified_tls_quiet(self._config.verify_tls):
+            response = self._session.get(
+                url,
+                auth=basic,
+                params=request_params,
+                verify=self._config.verify_tls,
+                timeout=30,
+            )
 
         if response.status_code != 200:
             self._logger.error(f"API call failed: {response.status_code} {response.text}")
@@ -422,15 +422,16 @@ class NvidiaCumulusSwitch(NetworkSwitch):
         request_params = dict(params) if params else None
 
         self._logger.debug(f"NVUE {method} {path} params={request_params} body={json_body}")
-        response = self._session.request(
-            method,
-            url,
-            auth=basic,
-            params=request_params,
-            json=json_body,
-            verify=self._config.verify_tls,
-            timeout=30,
-        )
+        with unverified_tls_quiet(self._config.verify_tls):
+            response = self._session.request(
+                method,
+                url,
+                auth=basic,
+                params=request_params,
+                json=json_body,
+                verify=self._config.verify_tls,
+                timeout=30,
+            )
 
         if response.status_code not in (200, 201, 204):
             self._logger.error(f"API call failed: {response.status_code} {response.text}")

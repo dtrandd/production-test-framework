@@ -22,9 +22,12 @@ from .ssh import CommandResult
 
 __all__ = ["SSH_OPTIONS", "Host"]
 
-SSH_OPTIONS = (
+_CONNECT_OPTIONS = (
     "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=10",
+)  # fmt: skip
+SSH_OPTIONS = (
+    *_CONNECT_OPTIONS,
     "-o", "ControlMaster=auto",
     "-o", "ControlPath=~/.ssh/ptf-%C",
     "-o", "ControlPersist=60",
@@ -32,10 +35,15 @@ SSH_OPTIONS = (
 
 
 class Host:
-    """A machine to run commands on: this one for a localhost address, else over ssh."""
+    """A machine to run commands on: this one for a localhost address, else over ssh.
 
-    def __init__(self, address: str = "localhost"):
+    *ssh_options* are extra ``-o`` settings for ssh, e.g. ``IdentityFile=...`` or
+    ``UserKnownHostsFile=...``.
+    """
+
+    def __init__(self, address: str = "localhost", ssh_options: Sequence[str] = ()):
         self.address = address.strip() or "localhost"
+        self.ssh_options = tuple(ssh_options)
 
     def __str__(self) -> str:
         return self.address
@@ -52,11 +60,17 @@ class Host:
     def local(self) -> bool:
         return is_localhost(self.hostname)
 
-    def argv(self, command: Sequence[str]) -> list[str]:
-        """*command* as run on this host: itself here, else wrapped in ssh."""
+    def argv(self, command: Sequence[str], *, shared_connection: bool = True) -> list[str]:
+        """*command* as run on this host: itself here, else wrapped in ssh.
+
+        A long-running command should pass ``shared_connection=False``, so it does not hold
+        one of the sessions of the connection the host's other commands share.
+        """
         if self.local:
             return list(command)
-        return ["ssh", *SSH_OPTIONS, self.address, shlex.join(command)]
+        options = SSH_OPTIONS if shared_connection else (*_CONNECT_OPTIONS, "-o", "ControlPath=none")
+        extra = [arg for option in self.ssh_options for arg in ("-o", option)]
+        return ["ssh", *options, *extra, self.address, shlex.join(command)]
 
     def run(self, command: Sequence[str], timeout: int = 60, stdin_data: str | None = None) -> CommandResult:
         return run_command(self.argv(command), timeout=timeout, stdin_data=stdin_data)
