@@ -436,6 +436,9 @@ def gpu_flags(vendor: GpuVendor, gpus: tuple[int, ...]) -> list[str]:
             "--device", "/dev/dri",
             "--group-add", "video",
             "--security-opt", "seccomp=unconfined",
+            # ROCm's IPC (HSA_ENABLE_IPC_MODE_LEGACY=0) fails, with hipIpcGetMemHandle: invalid argument,
+            # in a second container whose processes have the same pids as the first's: share the host's.
+            "--pid", "host",
             "--env", f"HIP_VISIBLE_DEVICES={devices}",
         ]  # fmt: skip
     return ["--gpus", f'"device={devices}"']

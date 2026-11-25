@@ -181,6 +181,7 @@ class TestDeployment:
         (run,) = host.docker_runs()
         assert "--gpus" not in run
         assert run[run.index("--device") + 1] == "/dev/kfd" and "HIP_VISIBLE_DEVICES=0,1" in run
+        assert run[run.index("--pid") + 1] == "host"
         assert AMD.image in run
 
     def test_an_image_given_replaces_the_vendors(self, tmp_path):
