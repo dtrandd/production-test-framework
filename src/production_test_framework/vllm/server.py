@@ -56,9 +56,9 @@ __all__ = [
 _log = logging.getLogger(__name__)
 
 VLLM_IMAGE = "openmosaic/mosaic-vllm:latest"
-#: ROCm's vLLM build, for AMD GPUs. Its tags are per GPU family (Instinct, Radeon), so a profile
-#: may need to name another one.
-ROCM_VLLM_IMAGE = "rocm/vllm:latest"
+#: vLLM's ROCm build, for AMD GPUs. Not rocm/vllm:latest (vLLM 0.32): its nixl-rocm 1.4.0 moves
+#: disaggregated KV transfers through host memory, not GPU to GPU; 0.34's nixl-rocm 1.5.0 does not.
+ROCM_VLLM_IMAGE = "vllm/vllm-openai-rocm:v0.34.0"
 
 #: vLLM's own default, for args that drop gpu_memory_utilization.
 VLLM_MEMORY_UTILIZATION = 0.9
