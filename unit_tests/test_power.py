@@ -16,7 +16,7 @@ from production_test_framework.agentx.power import (
     server_power_watts,
 )
 from production_test_framework.host import Host
-from production_test_framework.reporting.agentx import power_summary_rows
+from production_test_framework.reporting.power import power_summary_rows
 from production_test_framework.ssh import CommandResult
 from production_test_framework.vllm.server import AMD
 
